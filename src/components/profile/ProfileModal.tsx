@@ -175,14 +175,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Username / ID Login / Email (Bebas)
+                  Username / ID Login (NIS / Username)
                 </label>
                 <input
                   type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  placeholder="Username, NISN, NIP, atau Email"
+                  placeholder="NIS Siswa / Username Akun"
                   className="w-full px-3 py-2 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-white"
                 />
               </div>
@@ -257,11 +257,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                   </p>
                 </div>
 
-                {/* Email */}
+                {/* Username */}
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800">
                   <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                    <Mail className="w-3 h-3 text-indigo-500" />
-                    Email Akun
+                    <UserIcon className="w-3 h-3 text-indigo-500" />
+                    Username Akun
                   </span>
                   <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 mt-1 truncate">
                     {currentUser.email}

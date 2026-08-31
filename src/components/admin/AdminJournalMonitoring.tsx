@@ -263,7 +263,7 @@ export const AdminJournalMonitoring: React.FC = () => {
     const studentUser = allUsers.find(u => u.id === journal.studentId) || {
       id: journal.studentId,
       name: journal.studentName,
-      email: `${journal.studentNisn || 'siswa'}@sekolah.id`,
+      email: journal.studentNisn || 'siswa',
       role: 'siswa' as const,
       className: journal.className,
       nisn: journal.studentNisn,

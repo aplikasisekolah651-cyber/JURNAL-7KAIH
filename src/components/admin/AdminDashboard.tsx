@@ -193,98 +193,232 @@ export const AdminDashboard: React.FC = () => {
   const teachers = useMemo(() => allUsers.filter(u => u.role === 'walikelas'), [allUsers]);
   const admins = useMemo(() => allUsers.filter(u => u.role === 'admin'), [allUsers]);
 
-  // Helper parser for single student import row/line
-  const parseImportLine = (line: string) => {
-    const parts = line.split(',').map(s => s.trim());
-    const nis = parts[0] || '';
-    let noAbsen = '';
-    let name = '';
-    let gender: 'L' | 'P' = 'L';
-    let className = '7A';
-    let parentName = '';
-    let parentPhone = '';
+  // Helper to normalize gender strings
+  const normalizeGenderVal = (val?: string): 'L' | 'P' => {
+    if (!val) return 'L';
+    const s = String(val).trim().toUpperCase();
+    if (s.startsWith('P') || s === 'WANITA' || s === 'PEREMPUAN' || s === 'F' || s === 'FEMALE') {
+      return 'P';
+    }
+    return 'L';
+  };
 
-    if (parts.length >= 7) {
-      const isPart1Absen = /^\d{1,3}$/.test(parts[1]);
-      if (isPart1Absen) {
-        noAbsen = parts[1];
-        name = parts[2] || '';
-        const gStr = (parts[3] || '').toUpperCase();
-        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
-        className = normalizeClassName(parts[4]);
-        parentName = parts[5] || '';
-        parentPhone = parts[6] || '';
-      } else {
-        name = parts[1] || '';
-        noAbsen = parts[2] || '';
-        const gStr = (parts[3] || '').toUpperCase();
-        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
-        className = normalizeClassName(parts[4]);
-        parentName = parts[5] || '';
-        parentPhone = parts[6] || '';
+  const isGenderToken = (val?: string): boolean => {
+    if (!val) return false;
+    const s = String(val).trim().toUpperCase();
+    return s === 'L' || s === 'P' || s === 'LAKI-LAKI' || s === 'PEREMPUAN' || s === 'LAKI' || s === 'WANITA' || s === 'PRIA' || s === 'M' || s === 'F';
+  };
+
+  const isClassToken = (val?: string): boolean => {
+    if (!val) return false;
+    const s = String(val).trim().toUpperCase().replace(/\s+/g, '');
+    return /^[789VII|vii|VIII|IX|X]+[A-Z0-9]*$/.test(s) || /^[0-9]{1,2}[A-Z]$/.test(s);
+  };
+
+  const isPhoneToken = (val?: string): boolean => {
+    if (!val) return false;
+    const s = String(val).trim().replace(/[^0-9+]/g, '');
+    return (s.startsWith('08') || s.startsWith('62') || s.startsWith('+62')) && s.length >= 9;
+  };
+
+  // Helper parser for single student import row/line (supports CSV, TSV/Excel copy-paste, semicolon, and pipe)
+  // Equipped with Semantic Entity Extraction to auto-disambiguate shifted columns and auto-heal missing NIS
+  const parseImportLine = (line: string, rowIdx: number = 1) => {
+    const rawLine = line.trim();
+    if (!rawLine) {
+      return {
+        nis: '',
+        nisn: '',
+        noAbsen: '',
+        attendanceNumber: '',
+        name: '',
+        gender: 'L' as 'L' | 'P',
+        className: '7A',
+        studentUsername: '',
+        studentPassword: '',
+        parentName: '',
+        parentPhone: '',
+        parentUsername: '',
+        parentPassword: '',
+        isValid: false,
+        isHeader: false,
+        errorReason: 'Baris kosong'
+      };
+    }
+
+    // Auto-detect delimiter: Tab (from Excel/Google Sheets copy), Semicolon, Pipe, or Comma
+    let delimiter = ',';
+    if (rawLine.includes('\t')) delimiter = '\t';
+    else if (rawLine.includes(';') && !rawLine.includes(',')) delimiter = ';';
+    else if (rawLine.includes('|')) delimiter = '|';
+
+    // Parse tokens respecting trimmed string cleanups
+    const rawParts = rawLine.split(delimiter).map(s => {
+      let clean = s.trim().replace(/^["']|["']$/g, '');
+      if (/^\d+\.0$/.test(clean)) clean = clean.replace(/\.0$/, '');
+      return clean;
+    });
+
+    // Check if line is a header row
+    const joinedLower = rawParts.join(' ').toLowerCase();
+    const isHeader = (
+      (joinedLower.includes('nama') && (joinedLower.includes('nis') || joinedLower.includes('kelas') || joinedLower.includes('absen') || joinedLower.includes('kelamin') || joinedLower.includes('gender') || joinedLower.includes('ortu'))) ||
+      (joinedLower.includes('no') && (joinedLower.includes('absen') || joinedLower.includes('nama') || joinedLower.includes('siswa'))) ||
+      (joinedLower.includes('daftar siswa') || joinedLower.includes('rekap peserta') || joinedLower.includes('buku induk')) ||
+      rawParts[0]?.toLowerCase() === 'nis' ||
+      rawParts[0]?.toLowerCase() === 'no' ||
+      rawParts[0]?.toLowerCase() === 'no.' ||
+      rawParts[0]?.toLowerCase() === 'no urut' ||
+      rawParts[0]?.toLowerCase() === 'nisn'
+    );
+
+    if (isHeader) {
+      return {
+        nis: rawParts[0] || 'NIS',
+        nisn: rawParts[0] || 'NIS',
+        noAbsen: '',
+        attendanceNumber: '',
+        name: 'Header Kolom',
+        gender: 'L' as 'L' | 'P',
+        className: '',
+        studentUsername: '',
+        studentPassword: '',
+        parentName: '',
+        parentPhone: '',
+        parentUsername: '',
+        parentPassword: '',
+        isValid: false,
+        isHeader: true,
+        errorReason: 'Baris judul header'
+      };
+    }
+
+    // Semantic Token Classification
+    let detectedPhone = '';
+    let detectedClass = '';
+    let detectedGender: 'L' | 'P' | null = null;
+    let detectedAbsen = '';
+    let detectedNis = '';
+    const detectedNames: string[] = [];
+
+    // Filter non-empty tokens
+    const validTokens = rawParts.filter(p => p !== '' && p !== '-');
+
+    validTokens.forEach((token) => {
+      // 1. Phone number
+      if (!detectedPhone && isPhoneToken(token)) {
+        detectedPhone = token.replace(/[^0-9+]/g, '');
+        return;
       }
-    } else if (parts.length === 6) {
-      const isPart1Absen = /^\d{1,3}$/.test(parts[1]);
-      if (isPart1Absen) {
-        noAbsen = parts[1];
-        name = parts[2] || '';
-        const gStr = (parts[3] || '').toUpperCase();
-        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
-        className = normalizeClassName(parts[4]);
-        parentName = parts[5] || '';
-      } else {
-        name = parts[1] || '';
-        const gStr = (parts[2] || '').toUpperCase();
-        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
-        className = normalizeClassName(parts[3]);
-        parentName = parts[4] || '';
-        parentPhone = parts[5] || '';
+
+      // 2. Class name (e.g. 7A, 7B, 8A, 9F)
+      if (!detectedClass && isClassToken(token)) {
+        detectedClass = normalizeClassName(token);
+        return;
       }
-    } else {
-      name = parts[1] || '';
-      const part2 = parts[2] || '';
-      if (part2.toUpperCase() === 'L' || part2.toUpperCase() === 'P') {
-        gender = part2.toUpperCase() === 'P' ? 'P' : 'L';
-        className = normalizeClassName(parts[3]);
-        parentName = parts[4] || '';
+
+      // 3. Gender (L / P)
+      if (!detectedGender && isGenderToken(token)) {
+        detectedGender = normalizeGenderVal(token);
+        return;
+      }
+
+      // 4. Absen number (1-2 digits, 1 to 50)
+      if (!detectedAbsen && /^\d{1,2}$/.test(token) && parseInt(token, 10) >= 1 && parseInt(token, 10) <= 60) {
+        detectedAbsen = token.padStart(2, '0');
+        return;
+      }
+
+      // 5. NIS (Numeric string 3-12 digits)
+      if (!detectedNis && /^\d{3,12}$/.test(token)) {
+        detectedNis = token;
+        return;
+      }
+
+      // 6. Text Names (Student Name / Parent Name)
+      // If it contains alphabetic characters and is not a gender or class token
+      if (/[a-zA-Z]/.test(token) && token.length >= 2 && !isGenderToken(token) && !isClassToken(token)) {
+        detectedNames.push(token);
+      }
+    });
+
+    // Resolve Student & Parent Names
+    let finalStudentName = '';
+    let finalParentName = '';
+
+    if (detectedNames.length >= 2) {
+      finalStudentName = detectedNames[0];
+      finalParentName = detectedNames[1];
+    } else if (detectedNames.length === 1) {
+      finalStudentName = detectedNames[0];
+      finalParentName = `Orang Tua dari ${finalStudentName}`;
+    }
+
+    const finalClassName = detectedClass || '7A';
+    const finalGender = detectedGender || 'L';
+    const finalNoAbsen = detectedAbsen || (rowIdx > 0 ? String(rowIdx).padStart(2, '0') : '01');
+
+    // Auto-Heal NIS if missing: construct from Class + Absen (e.g., 7A01, 7A02) or generated unique ID
+    let finalNis = detectedNis;
+    if (!finalNis || finalNis === 'L' || finalNis === 'P' || finalNis.length < 2) {
+      if (finalClassName && finalNoAbsen) {
+        finalNis = `${finalClassName.replace(/[^a-zA-Z0-9]/g, '')}${finalNoAbsen.padStart(2, '0')}`;
       } else {
-        className = normalizeClassName(part2);
-        parentName = parts[3] || '';
-        parentPhone = parts[4] || '';
+        finalNis = `24${String(rowIdx).padStart(3, '0')}`;
       }
     }
 
-    const pAutoName = parentName || (name ? `Orang Tua dari ${name}` : '');
-    const isValid = nis.length >= 3 && name.length >= 2;
+    // Clean strings and sanitize tokens
+    const cleanNis = finalNis.trim().replace(/[^a-zA-Z0-9._-]/g, '');
+    const cleanName = finalStudentName.trim();
+    const cleanNoAbsen = finalNoAbsen.trim() === '-' ? '' : finalNoAbsen.trim();
+    const pAutoName = finalParentName.trim() || (cleanName ? `Orang Tua dari ${cleanName}` : '');
+
+    let errorReason = '';
+    if (!cleanName || cleanName.length < 2) {
+      errorReason = 'Nama siswa belum lengkap';
+    } else if (!cleanNis) {
+      errorReason = 'NIS tidak boleh kosong';
+    }
+
+    const isValid = Boolean(cleanNis && cleanName && cleanName.length >= 2 && !isHeader);
 
     return {
-      nis,
-      nisn: nis,
-      noAbsen,
-      attendanceNumber: noAbsen,
-      name,
-      gender,
-      className,
-      studentUsername: `${nis}@sekolah.id`,
-      studentPassword: `siswa${nis}`,
+      nis: cleanNis,
+      nisn: cleanNis,
+      noAbsen: cleanNoAbsen,
+      attendanceNumber: cleanNoAbsen,
+      name: cleanName,
+      gender: finalGender,
+      className: finalClassName,
+      studentUsername: cleanNis,
+      studentPassword: `siswa${cleanNis}`,
       parentName: pAutoName,
-      parentPhone,
-      parentUsername: `ortu.${nis}@sekolah.id`,
-      parentPassword: `ortu${nis}`,
-      isValid
+      parentPhone: detectedPhone.trim(),
+      parentUsername: `ortu.${cleanNis}`,
+      parentPassword: `ortu${cleanNis}`,
+      isValid,
+      isHeader: false,
+      errorReason
     };
   };
 
-  // Live parsing preview for bulk import
+  // Live parsing preview for bulk import (automatically skips header rows)
   const parsedImportPreview = useMemo(() => {
     const lines = importText.trim().split('\n').filter(l => l.trim().length > 0);
-    return lines.map((line, idx) => {
-      const parsed = parseImportLine(line);
-      return {
-        idx: idx + 1,
-        ...parsed
-      };
-    });
+    const results: Array<ReturnType<typeof parseImportLine> & { idx: number }> = [];
+    let validIdx = 1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const parsed = parseImportLine(lines[i], validIdx);
+      if (!parsed.isHeader && (parsed.name || parsed.nis)) {
+        results.push({
+          idx: validIdx++,
+          ...parsed
+        });
+      }
+    }
+    return results;
   }, [importText]);
 
   // Filtered Students
@@ -642,9 +776,10 @@ export const AdminDashboard: React.FC = () => {
     setImportSuccessCount(null);
     try {
       const lines = importText.trim().split('\n');
-      const parsed = lines.map(line => {
-        const item = parseImportLine(line);
-        return {
+      const parsed = lines
+        .map(line => parseImportLine(line))
+        .filter(item => item.isValid && !item.isHeader)
+        .map(item => ({
           nis: item.nis,
           nisn: item.nisn,
           noAbsen: item.noAbsen,
@@ -654,27 +789,35 @@ export const AdminDashboard: React.FC = () => {
           className: item.className,
           parentName: item.parentName || undefined,
           parentPhone: item.parentPhone || undefined
-        };
-      }).filter(item => item.name && item.nis);
+        }));
+
+      if (parsed.length === 0) {
+        alert('Tidak ada baris data siswa yang valid untuk diimpor. Pastikan minimal mengisi NIS dan Nama Siswa pada setiap baris.');
+        return;
+      }
 
       const count = await importStudentsBulk(parsed);
       setImportSuccessCount(count);
     } catch (err) {
       console.error('Import error:', err);
+      alert('Terjadi kesalahan saat memproses impor data. Silakan coba lagi.');
     } finally {
       setImporting(false);
     }
   };
 
-  // Download Sample Template CSV (7 Columns with No Absen and Gender)
+  // Download Sample Template CSV (7 Columns matching updated schema)
   const handleDownloadTemplate = () => {
     const csvContent = "data:text/csv;charset=utf-8," + 
       "NIS,No Absen,Nama Siswa,Jenis Kelamin (L/P),Kelas,Nama Orang Tua,No HP Orang Tua\n" +
-      "23451, 01, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801\n" +
-      "23452, 02, Annisa Rahma, P, 7A, Ibu Rahma, 081234567802\n" +
-      "23453, 03, Bayu Kurniawan, L, 7B, Bpk. Kurniawan, 081234567803\n" +
-      "23454, 04, Cinta Laura S., P, 7C, Ibu Laura, 081234567804\n" +
-      "23455, 05, Doni Pratama, L, 8A, Bpk. Pratama, 081234567805";
+      "23451,01,Ahmad Fauzan,L,7A,Bpk. Fauzan,081234567801\n" +
+      "23452,02,Annisa Rahma,P,7A,Ibu Rahma,081234567802\n" +
+      "23453,03,Bayu Kurniawan,L,7B,Bpk. Kurniawan,081234567803\n" +
+      "23454,04,Cinta Laura Santoso,P,7C,Ibu Laura,081234567804\n" +
+      "23455,05,Doni Pratama Putra,L,8A,Bpk. Pratama,081234567805\n" +
+      "23456,06,Eka Putri Lestari,P,8B,Ibu Lestari,081234567806\n" +
+      "23457,07,Farhan Ramadhan,L,9A,Bpk. Ramadhan,081234567807\n" +
+      "23458,08,Gita Permata Sari,P,9B,Ibu Permata,081234567808";
     
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -685,31 +828,74 @@ export const AdminDashboard: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  // Download Sample Template Excel (.xlsx) (7 Columns with No Absen and Gender)
+  // Download Sample Template Excel (.xlsx) matching latest database schema and account generator rules
   const handleDownloadExcelTemplate = () => {
+    // Sheet 1: Data Siswa (7 Standar Kolom Database)
     const wsData = [
       ['NIS', 'No Absen', 'Nama Siswa', 'Jenis Kelamin (L/P)', 'Kelas', 'Nama Orang Tua', 'No HP Orang Tua'],
       ['23451', '01', 'Ahmad Fauzan', 'L', '7A', 'Bpk. Fauzan', '081234567801'],
       ['23452', '02', 'Annisa Rahma', 'P', '7A', 'Ibu Rahma', '081234567802'],
       ['23453', '03', 'Bayu Kurniawan', 'L', '7B', 'Bpk. Kurniawan', '081234567803'],
-      ['23454', '04', 'Cinta Laura S.', 'P', '7C', 'Ibu Laura', '081234567804'],
-      ['23455', '05', 'Doni Pratama', 'L', '8A', 'Bpk. Pratama', '081234567805'],
+      ['23454', '04', 'Cinta Laura Santoso', 'P', '7C', 'Ibu Laura', '081234567804'],
+      ['23455', '05', 'Doni Pratama Putra', 'L', '8A', 'Bpk. Pratama', '081234567805'],
       ['23456', '06', 'Eka Putri Lestari', 'P', '8B', 'Ibu Lestari', '081234567806'],
-      ['23457', '07', 'Farhan Ramadhan', 'L', '9A', 'Bpk. Ramadhan', '081234567807']
+      ['23457', '07', 'Farhan Ramadhan', 'L', '9A', 'Bpk. Ramadhan', '081234567807'],
+      ['23458', '08', 'Gita Permata Sari', 'P', '9B', 'Ibu Permata', '081234567808']
     ];
+    
+    // Explicitly treat strings as text to protect leading zeros ('01', '0812...')
     const ws = XLSX.utils.aoa_to_sheet(wsData);
+    Object.keys(ws).forEach(cellKey => {
+      if (cellKey.startsWith('!')) return;
+      if (ws[cellKey] && typeof ws[cellKey].v === 'string') {
+        ws[cellKey].t = 's';
+      }
+    });
+
     ws['!cols'] = [
-      { wch: 14 },
-      { wch: 12 },
-      { wch: 28 },
-      { wch: 20 },
-      { wch: 12 },
-      { wch: 26 },
-      { wch: 18 }
+      { wch: 15 }, // NIS
+      { wch: 12 }, // No Absen
+      { wch: 30 }, // Nama Siswa
+      { wch: 22 }, // Jenis Kelamin
+      { wch: 12 }, // Kelas
+      { wch: 28 }, // Nama Orang Tua
+      { wch: 20 }  // No HP Orang Tua
     ];
+
+    // Sheet 2: Petunjuk Format Database & Akun
+    const guideData = [
+      ['PANDUAN LENGKAP TEMPLATE IMPOR DATA SISWA (7 KAIH SMPN 2 KASIHAN)'],
+      [''],
+      ['No', 'Nama Kolom', 'Keterangan Database', 'Kaidah Penulisan', 'Otomatisasi Akun Login'],
+      ['1', 'NIS', 'Nomor Induk Siswa (Wajib)', 'Angka/Teks unik siswa (cth: 23451)', 'Username Login Siswa: [NIS] | Sandi: siswa[NIS]'],
+      ['2', 'No Absen', 'Nomor Urut Presensi Kelas', '2 digit atau angka (cth: 01, 02, ...)', 'Disimpan sebagai Nomor Absen Siswa'],
+      ['3', 'Nama Siswa', 'Nama Lengkap Siswa (Wajib)', 'Nama lengkap sesuai rapor', 'Nama Profil Siswa'],
+      ['4', 'Jenis Kelamin (L/P)', 'Jenis Kelamin Siswa', 'Isi L (Laki-laki) atau P (Perempuan)', 'Avatar & profil otomatis sesuai gender'],
+      ['5', 'Kelas', 'Rombel / Kelas', 'Format 7A, 7B, 8A, 9A, dll.', 'Menghubungkan siswa dengan Wali Kelas'],
+      ['6', 'Nama Orang Tua', 'Nama Ayah/Ibu/Wali', 'Nama lengkap orang tua siswa', 'Username Ortu: ortu.[NIS] | Sandi: ortu[NIS]'],
+      ['7', 'No HP Orang Tua', 'No. WhatsApp/HP Orang Tua', 'Format 08xxxx atau 62xxxx', 'Disimpan untuk pengiriman rekap kredensial WhatsApp']
+    ];
+    const wsGuide = XLSX.utils.aoa_to_sheet(guideData);
+    wsGuide['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 30 },
+      { wch: 38 },
+      { wch: 55 }
+    ];
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'TemplateSiswa7KAIH');
+    XLSX.utils.book_append_sheet(wb, ws, 'Data_Siswa');
+    XLSX.utils.book_append_sheet(wb, wsGuide, 'Petunjuk_Format_Akun');
     XLSX.writeFile(wb, 'template_import_siswa_7kaih_smpn2kasihan.xlsx');
+  };
+
+  // Helper to safely clean string/number values from Excel cells
+  const cleanExcelCellValue = (val: any): string => {
+    if (val === null || val === undefined) return '';
+    let s = String(val).trim();
+    if (/^\d+\.0$/.test(s)) s = s.replace(/\.0$/, '');
+    return s;
   };
 
   // Handle Excel (.xlsx / .xls) and CSV file upload
@@ -725,66 +911,35 @@ export const AdminDashboard: React.FC = () => {
         if (!buffer) return;
 
         const workbook = XLSX.read(buffer, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+        // Select sheet: prefer sheet with 'siswa' or 'data' in name, or default to first sheet
+        const targetSheetName = workbook.SheetNames.find(n => {
+          const lower = n.toLowerCase();
+          return lower.includes('siswa') || lower.includes('data');
+        }) || workbook.SheetNames[0];
+        
+        const worksheet = workbook.Sheets[targetSheetName];
         const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
 
         const parsedLines: string[] = [];
-        let headerRowFound = false;
-        let colNisIdx = 0;
-        let colAbsenIdx = 1;
-        let colNameIdx = 2;
-        let colGenderIdx = 3;
-        let colClassIdx = 4;
-        let colParentIdx = 5;
-        let colPhoneIdx = 6;
+        let validIdx = 1;
 
         for (let r = 0; r < rawRows.length; r++) {
           const row = rawRows[r];
           if (!row || row.length === 0) continue;
 
-          const rowStr = row.map((c: any) => String(c || '').trim().toLowerCase()).join(' ');
+          // Join row cells using tab delimiter to preserve column boundaries
+          const joinedRow = row.map((val: any) => cleanExcelCellValue(val)).join('\t');
+          if (!joinedRow.trim()) continue;
 
-          // Check if this is the header row
-          if (!headerRowFound && (rowStr.includes('nis') || rowStr.includes('nama') || rowStr.includes('absen'))) {
-            headerRowFound = true;
-            row.forEach((col: any, idx: number) => {
-              const str = String(col || '').trim().toLowerCase();
-              if (str.includes('absen') || str.includes('presensi') || str.includes('no.')) colAbsenIdx = idx;
-              else if (str.includes('nis')) colNisIdx = idx;
-              else if (str.includes('nama') && !str.includes('orang') && !str.includes('ortu') && !str.includes('wali')) colNameIdx = idx;
-              else if (str.includes('kelamin') || str.includes('gender') || str.includes('l/p')) colGenderIdx = idx;
-              else if (str.includes('kelas') || str.includes('rombel')) colClassIdx = idx;
-              else if (str.includes('ortu') || str.includes('orang tua') || str.includes('wali')) colParentIdx = idx;
-              else if (str.includes('hp') || str.includes('telepon') || str.includes('wa') || str.includes('kontak')) colPhoneIdx = idx;
-            });
-            continue;
-          }
+          const parsed = parseImportLine(joinedRow, validIdx);
 
-          const col0 = String(row[colNisIdx] !== undefined ? row[colNisIdx] : (row[0] || '')).trim();
-          const colName = String(row[colNameIdx] !== undefined ? row[colNameIdx] : (row[1] || '')).trim();
+          // Skip header row
+          if (parsed.isHeader) continue;
 
-          if (!col0 && !colName) continue;
-
-          // If standard column structure wasn't detected by header, parse row elements directly
-          if (!headerRowFound) {
-            const joinedRow = row.map((val: any) => String(val || '').trim()).join(', ');
-            const parsedItem = parseImportLine(joinedRow);
-            if (parsedItem.nis && parsedItem.name) {
-              parsedLines.push(`${parsedItem.nis}, ${parsedItem.noAbsen || ''}, ${parsedItem.name}, ${parsedItem.gender}, ${parsedItem.className}, ${parsedItem.parentName}, ${parsedItem.parentPhone}`);
-            }
-          } else {
-            const nis = col0;
-            const noAbsen = row[colAbsenIdx] !== undefined ? String(row[colAbsenIdx]).trim() : '';
-            const name = colName;
-            const rawG = row[colGenderIdx] !== undefined ? String(row[colGenderIdx]).trim().toUpperCase() : 'L';
-            const gender = rawG.startsWith('P') || rawG === 'WANITA' || rawG === 'PEREMPUAN' ? 'P' : 'L';
-            const rawClass = row[colClassIdx] !== undefined ? String(row[colClassIdx]).trim() : '7A';
-            const className = normalizeClassName(rawClass);
-            const parentName = row[colParentIdx] !== undefined ? String(row[colParentIdx]).trim() : '';
-            const parentPhone = row[colPhoneIdx] !== undefined ? String(row[colPhoneIdx]).trim() : '';
-
-            parsedLines.push(`${nis}, ${noAbsen}, ${name}, ${gender}, ${className}, ${parentName}, ${parentPhone}`);
+          // If row contains valid name or NIS
+          if (parsed.name && parsed.name.length >= 2) {
+            parsedLines.push(`${parsed.nis}, ${parsed.noAbsen || String(validIdx).padStart(2, '0')}, ${parsed.name}, ${parsed.gender}, ${parsed.className}, ${parsed.parentName}, ${parsed.parentPhone}`);
+            validIdx++;
           }
         }
 
@@ -792,11 +947,15 @@ export const AdminDashboard: React.FC = () => {
           setImportText(parsedLines.join('\n'));
           setImportSuccessCount(null);
         } else {
-          alert('Tidak ada baris data siswa yang ditemukan pada file Excel.');
+          alert('Tidak ada baris data siswa yang ditemukan pada file Excel. Pastikan file memiliki data nama siswa.');
         }
       } catch (err) {
         console.error('Error parsing Excel file:', err);
         alert('Gagal memproses file. Pastikan file berformat .xlsx, .xls, atau .csv yang valid.');
+      } finally {
+        if (excelFileInputRef.current) {
+          excelFileInputRef.current.value = '';
+        }
       }
     };
     reader.readAsArrayBuffer(file);
@@ -807,8 +966,11 @@ export const AdminDashboard: React.FC = () => {
 `23451, 01, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801
 23452, 02, Annisa Rahma, P, 7A, Ibu Rahma, 081234567802
 23453, 03, Bayu Kurniawan, L, 7B, Bpk. Kurniawan, 081234567803
-23454, 04, Cinta Laura S., P, 7C, Ibu Laura, 081234567804
-23455, 05, Doni Pratama, L, 8A, Bpk. Pratama, 081234567805`
+23454, 04, Cinta Laura Santoso, P, 7C, Ibu Laura, 081234567804
+23455, 05, Doni Pratama Putra, L, 8A, Bpk. Pratama, 081234567805
+23456, 06, Eka Putri Lestari, P, 8B, Ibu Lestari, 081234567806
+23457, 07, Farhan Ramadhan, L, 9A, Bpk. Ramadhan, 081234567807
+23458, 08, Gita Permata Sari, P, 9B, Ibu Permata, 081234567808`
     );
     setImportSuccessCount(null);
   };
@@ -831,17 +993,19 @@ export const AdminDashboard: React.FC = () => {
 
     list.forEach((s, idx) => {
       const linkedParent = parents.find(p => p.id === s.parentId || (p.studentIds && p.studentIds.includes(s.id)));
-      const sPwd = s.password || `siswa${s.nisn || '123'}`;
-      const pPwd = linkedParent?.password || (s.nisn ? `ortu${s.nisn}` : 'ortu123#');
+      const sPwd = s.password || `siswa${s.nis || s.nisn || '123'}`;
+      const sNis = s.nis || s.nisn || s.email;
+      const pPwd = linkedParent?.password || `ortu${sNis}`;
+      const pUser = linkedParent ? linkedParent.email : `ortu.${sNis}`;
 
-      text += `${idx + 1}. *${s.name}* (NISN: ${s.nisn || '-'})\n`;
+      text += `${idx + 1}. *${s.name}* (NIS: ${sNis})\n`;
       text += `   👤 *Login Siswa*:\n`;
-      text += `      • Username/NISN: ${s.nisn || s.email}\n`;
+      text += `      • Username (NIS): ${sNis}\n`;
       text += `      • Password: ${sPwd}\n`;
       
       if (linkedParent) {
         text += `   👨‍👩‍👧 *Login Orang Tua* (${linkedParent.name}):\n`;
-        text += `      • Username: ${linkedParent.email.split('@')[0]} atau ortu.${s.nisn}\n`;
+        text += `      • Username: ${pUser}\n`;
         text += `      • Password: ${pPwd}\n`;
       }
       text += `\n`;
@@ -850,7 +1014,7 @@ export const AdminDashboard: React.FC = () => {
     text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     text += `📌 *Petunjuk Masuk*:\n`;
     text += `1. Buka aplikasi Jurnal 7 KAIH SMP Negeri 2 Kasihan\n`;
-    text += `2. Masukkan Username / NISN dan Password di atas sesuai peran Anda.\n`;
+    text += `2. Masukkan Username (NIS untuk Siswa, ortu.NIS untuk Orang Tua) dan Password di atas.\n`;
     text += `3. Jaga kerahasiaan kata sandi Anda. Salam sehat & berkarakter!`;
 
     navigator.clipboard.writeText(text);
@@ -1410,7 +1574,7 @@ export const AdminDashboard: React.FC = () => {
                     <th className="p-3 text-center">No. Absen</th>
                     <th className="p-3 text-center">L/P</th>
                     <th className="p-3">Kelas</th>
-                    <th className="p-3">Username / Email Login</th>
+                    <th className="p-3">Username (NIS)</th>
                     <th className="p-3">Orang Tua Terhubung</th>
                     <th className="p-3">Password Kredensial</th>
                     <th className="p-3 text-center">Aksi</th>
@@ -1683,7 +1847,7 @@ export const AdminDashboard: React.FC = () => {
                 <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Cari nama orang tua, no HP/WhatsApp, atau email..."
+                  placeholder="Cari nama orang tua, no HP/WhatsApp, atau username..."
                   value={parentSearch}
                   onChange={(e) => setParentSearch(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 text-xs text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-rose-500"
@@ -1737,7 +1901,7 @@ export const AdminDashboard: React.FC = () => {
                     </th>
                     <th className="p-3">Nama Orang Tua</th>
                     <th className="p-3">No. WhatsApp / HP</th>
-                    <th className="p-3">Username / Email</th>
+                    <th className="p-3">Username Ortu</th>
                     <th className="p-3">Siswa Asuh (Anak)</th>
                     <th className="p-3">Password</th>
                     <th className="p-3 text-center">Aksi</th>
@@ -2107,22 +2271,67 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             {/* Format Instructions Box */}
-            <div className="p-3.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-900/50 space-y-2">
-              <div className="flex items-center gap-1.5 text-purple-800 dark:text-purple-300 text-xs font-bold">
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Format Standar Kolom Data Impor (7 Kolom):</span>
+            <div className="p-4 rounded-xl bg-purple-50/70 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900/60 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2 text-purple-900 dark:text-purple-200 text-xs font-bold">
+                  <FileSpreadsheet className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <span>Format Standar 7 Kolom Data Siswa:</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText("NIS,No Absen,Nama Siswa,Jenis Kelamin (L/P),Kelas,Nama Orang Tua,No HP Orang Tua");
+                    alert('Format header kolom berhasil disalin ke clipboard!');
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] text-purple-700 dark:text-purple-300 hover:text-purple-900 font-semibold bg-white dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800 shadow-2xs hover:bg-purple-50 transition-all cursor-pointer"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>Salin Header Kolom</span>
+                </button>
               </div>
-              <p className="font-mono text-[11px] bg-white dark:bg-slate-900 p-2 rounded-lg border border-purple-200 dark:border-purple-800 text-purple-950 dark:text-purple-200 overflow-x-auto">
-                NIS, No Absen, Nama Siswa, Jenis Kelamin (L/P), Kelas, Nama Orang Tua, No HP Orang Tua
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-600 dark:text-slate-400 pt-1">
+
+              {/* 7 Columns Visual Badges */}
+              <div className="flex flex-wrap gap-1.5 font-sans">
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 shadow-2xs">
+                  1. NIS <span className="text-rose-500">*</span>
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-slate-700 dark:text-slate-300 shadow-2xs">
+                  2. No Absen
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 shadow-2xs">
+                  3. Nama Siswa <span className="text-rose-500">*</span>
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-sky-700 dark:text-sky-300 shadow-2xs">
+                  4. JK (L/P)
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-blue-700 dark:text-blue-300 shadow-2xs">
+                  5. Kelas (7A-9F)
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-rose-700 dark:text-rose-300 shadow-2xs">
+                  6. Nama Orang Tua
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 shadow-2xs">
+                  7. No HP Ortu (WA)
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 space-y-1">
+                <p className="font-mono text-[11px] text-purple-950 dark:text-purple-200 overflow-x-auto whitespace-nowrap">
+                  NIS, No Absen, Nama Siswa, Jenis Kelamin (L/P), Kelas, Nama Orang Tua, No HP Orang Tua
+                </p>
+                <p className="font-mono text-[10px] text-slate-500 dark:text-slate-400 overflow-x-auto whitespace-nowrap">
+                  Contoh: 23451, 01, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-600 dark:text-slate-400 pt-0.5">
                 <div className="flex items-start gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-purple-600 mt-1.5 shrink-0" />
-                  <p><strong>Akun Siswa:</strong> Username <code>[NIS]@sekolah.id</code> / NIS | Password <code>siswa[NIS]</code></p>
+                  <p><strong>Akun Siswa Otomatis:</strong> User <code>[NIS]</code> | Sandi <code>siswa[NIS]</code></p>
                 </div>
                 <div className="flex items-start gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" />
-                  <p><strong>Akun Orang Tua:</strong> Username <code>ortu.[NIS]@sekolah.id</code> | Password <code>ortu[NIS]</code></p>
+                  <p><strong>Akun Orang Tua Otomatis:</strong> User <code>ortu.[NIS]</code> | Sandi <code>ortu[NIS]</code></p>
                 </div>
               </div>
             </div>
@@ -2153,37 +2362,57 @@ export const AdminDashboard: React.FC = () => {
               {/* Live Interactive Table Preview */}
               {parsedImportPreview.length > 0 && (
                 <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                       <Eye className="w-3.5 h-3.5 text-purple-600" />
                       <span>Pratinjau Otomatisasi Akun ({parsedImportPreview.length} Data Terdeteksi):</span>
                     </span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
-                      Semua siap digenerate
-                    </span>
+                    {parsedImportPreview.some(r => !r.isValid) ? (
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold bg-amber-50 dark:bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                        {parsedImportPreview.filter(r => !r.isValid).length} Data Perlu Diperbaiki
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Semua ({parsedImportPreview.length}) Siap Diimpor
+                      </span>
+                    )}
                   </div>
 
-                  <div className="overflow-x-auto max-h-56 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                  <div className="overflow-x-auto max-h-64 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase text-[9px] font-bold sticky top-0">
+                      <thead className="bg-slate-50 dark:bg-slate-800/90 text-slate-600 dark:text-slate-400 uppercase text-[9px] font-bold sticky top-0 z-10 border-b border-slate-200 dark:border-slate-800">
                         <tr>
-                          <th className="p-2.5">No</th>
+                          <th className="p-2.5 w-10">No</th>
                           <th className="p-2.5">Siswa & NIS</th>
-                          <th className="p-2.5 text-center">No. Absen</th>
-                          <th className="p-2.5">Kelas</th>
+                          <th className="p-2.5 text-center w-20">No. Absen</th>
+                          <th className="p-2.5 text-center w-16">Kelas</th>
                           <th className="p-2.5">Kredensial Siswa</th>
                           <th className="p-2.5">Orang Tua Terhubung</th>
                           <th className="p-2.5">Kredensial Orang Tua</th>
-                          <th className="p-2.5 text-center">Status</th>
+                          <th className="p-2.5 text-center w-28">Status</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-sans">
                         {parsedImportPreview.map((row) => (
-                          <tr key={row.idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                            <td className="p-2.5 text-slate-400 font-mono">{row.idx}</td>
-                            <td className="p-2.5 font-bold text-slate-900 dark:text-white">
-                              {row.name || <span className="text-rose-500 italic">Nama kosong</span>}
-                              <span className="block text-[10px] text-indigo-600 font-mono">NIS: {row.nis}</span>
+                          <tr key={row.idx} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${!row.isValid ? 'bg-rose-50/30 dark:bg-rose-950/20' : ''}`}>
+                            <td className="p-2.5 text-slate-400 font-mono text-center">{row.idx}</td>
+                            <td className="p-2.5">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-slate-900 dark:text-white">
+                                  {row.name || <span className="text-rose-500 italic">Nama kosong</span>}
+                                </span>
+                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                                  row.gender === 'P'
+                                    ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                                    : 'bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800'
+                                }`}>
+                                  {row.gender === 'P' ? 'P' : 'L'}
+                                </span>
+                              </div>
+                              <span className="block text-[10px] text-indigo-600 dark:text-indigo-400 font-mono font-medium">
+                                NIS: {row.nis || <span className="text-rose-500 italic">-</span>}
+                              </span>
                             </td>
                             <td className="p-2.5 text-center">
                               {row.noAbsen ? (
@@ -2194,20 +2423,26 @@ export const AdminDashboard: React.FC = () => {
                                 <span className="text-slate-400 text-[10px] italic">-</span>
                               )}
                             </td>
-                            <td className="p-2.5">
-                              <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
+                            <td className="p-2.5 text-center">
+                              <span className="inline-block px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold border border-blue-200 dark:border-blue-800">
                                 {row.className}
                               </span>
                             </td>
                             <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-300">
-                              <div>User: <strong className="text-indigo-600 dark:text-indigo-400">{row.nis}</strong></div>
-                              <div>Pass: <strong>{row.studentPassword}</strong></div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-slate-400">User:</span>
+                                <strong className="text-indigo-600 dark:text-indigo-400">{row.nis || '-'}</strong>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-slate-400">Pass:</span>
+                                <strong>{row.studentPassword || '-'}</strong>
+                              </div>
                             </td>
                             <td className="p-2.5">
                               {row.parentName ? (
                                 <div>
-                                  <span className="font-semibold text-slate-800 dark:text-slate-200">{row.parentName}</span>
-                                  <span className="block text-[10px] text-slate-400">{row.parentPhone || '-'}</span>
+                                  <span className="font-semibold text-slate-800 dark:text-slate-200 block text-xs">{row.parentName}</span>
+                                  <span className="block text-[10px] text-slate-400 font-mono">{row.parentPhone || '-'}</span>
                                 </div>
                               ) : (
                                 <span className="text-[10px] text-slate-400 italic">Tanpa akun ortu</span>
@@ -2216,19 +2451,25 @@ export const AdminDashboard: React.FC = () => {
                             <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-300">
                               {row.parentName ? (
                                 <div>
-                                  <div>User: <strong className="text-rose-600 dark:text-rose-400">ortu.{row.nis}</strong></div>
-                                  <div>Pass: <strong>{row.parentPassword}</strong></div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-slate-400">User:</span>
+                                    <strong className="text-rose-600 dark:text-rose-400">{row.parentUsername}</strong>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-slate-400">Pass:</span>
+                                    <strong>{row.parentPassword}</strong>
+                                  </div>
                                 </div>
                               ) : '-'}
                             </td>
                             <td className="p-2.5 text-center">
                               {row.isValid ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950 px-2 py-0.5 rounded-full">
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full">
                                   <CheckCircle2 className="w-3 h-3" /> Siap
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 dark:bg-rose-950 px-2 py-0.5 rounded-full">
-                                  Tidak Valid
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/80 border border-rose-200 dark:border-rose-800 px-2 py-0.5 rounded-full" title={row.errorReason}>
+                                  <AlertCircle className="w-3 h-3" /> {row.errorReason || 'Tidak Valid'}
                                 </span>
                               )}
                             </td>
@@ -2430,8 +2671,8 @@ export const AdminDashboard: React.FC = () => {
 
                             <div className="space-y-1 text-[11px] font-mono">
                               <div className="flex justify-between">
-                                <span className="text-slate-500 dark:text-slate-400">User/NISN:</span>
-                                <strong className="text-slate-800 dark:text-slate-200">{s.nisn || s.email.split('@')[0]}</strong>
+                                <span className="text-slate-500 dark:text-slate-400">Username (NIS):</span>
+                                <strong className="text-slate-800 dark:text-slate-200">{s.nis || s.nisn || s.email}</strong>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500 dark:text-slate-400">Password:</span>
@@ -2462,8 +2703,8 @@ export const AdminDashboard: React.FC = () => {
                               <div className="space-y-1 text-[11px] font-mono">
                                 <div className="flex justify-between">
                                   <span className="text-slate-500 dark:text-slate-400">Username:</span>
-                                  <strong className="text-slate-800 dark:text-slate-200 truncate max-w-[100px]">
-                                    ortu.{s.nisn || linkedParent.email.split('@')[0]}
+                                  <strong className="text-slate-800 dark:text-slate-200 truncate max-w-[120px]">
+                                    {linkedParent.email}
                                   </strong>
                                 </div>
                                 <div className="flex justify-between">
@@ -2487,8 +2728,8 @@ export const AdminDashboard: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
                 {batchCredentialUsers.map((u) => {
                   const isPwdVisible = showPasswordsMap[u.id];
-                  const cardPwd = u.password || (u.role === 'siswa' ? `siswa${u.nisn || '123'}` : 'ortu123#');
-                  const shareText = `Kredensial Login Jurnal 7 KAIH SMP Negeri 2 Kasihan\nNama: ${u.name}\nUsername / NISN: ${u.nisn || u.email}\nPassword: ${cardPwd}\nPeran: ${u.role.toUpperCase()}`;
+                  const cardPwd = u.password || (u.role === 'siswa' ? `siswa${u.nis || u.nisn || '123'}` : 'ortu123#');
+                  const shareText = `Kredensial Login Jurnal 7 KAIH SMP Negeri 2 Kasihan\nNama: ${u.name}\nUsername: ${u.nis || u.nisn || u.email}\nPassword: ${cardPwd}\nPeran: ${u.role.toUpperCase()}`;
 
                   return (
                     <div key={u.id} className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40 space-y-2 relative">
@@ -2505,13 +2746,13 @@ export const AdminDashboard: React.FC = () => {
 
                       <div>
                         <p className="font-bold text-slate-900 dark:text-white text-xs truncate">{u.name}</p>
-                        {u.nisn && <p className="text-[10px] text-slate-500 font-mono">NISN: {u.nisn}</p>}
+                        {u.nis && <p className="text-[10px] text-slate-500 font-mono">NIS: {u.nis}</p>}
                       </div>
 
                       <div className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 text-[11px]">
                         <div className="flex justify-between">
                           <span className="text-slate-400">Username:</span>
-                          <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[140px]">{u.nisn || u.email}</span>
+                          <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[140px]">{u.nis || u.nisn || u.email}</span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-slate-400">Password:</span>
@@ -2803,25 +3044,25 @@ export const AdminDashboard: React.FC = () => {
                 </div>
                 <div>
                   <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                    Username / ID Login / Email (Bebas)
+                    Username / ID Login (NIS / Username)
                   </label>
                   <input
                     type="text"
                     placeholder={
                       addRole === 'siswa'
-                        ? 'Bebas: NISN / nama / budi123 (Kosong = otomatis)'
+                        ? 'NIS Siswa (cth: 23451)'
                         : addRole === 'orangtua'
-                        ? 'Bebas: ortu_budi / pak_joko / email (Kosong = otomatis)'
+                        ? 'ortu.NIS (cth: ortu.23451)'
                         : addRole === 'walikelas'
-                        ? 'Bebas: guru_ani / wali7a / NIP / email'
-                        : 'Bebas: admin_utama / admin2 / email'
+                        ? 'Bebas: wali.7a / NIP / username'
+                        : 'Bebas: admin_utama / admin2'
                     }
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500 text-xs"
                   />
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Bebas menggunakan teks biasa, username, NISN, NIP, atau email. Tidak wajib berformat '@'.
+                    Siswa cukup menggunakan NIS. Orang tua menggunakan ortu.[NIS]. Tidak menggunakan format '@'.
                   </p>
                 </div>
               </div>
@@ -2843,7 +3084,7 @@ export const AdminDashboard: React.FC = () => {
                 <p className="text-[10px] text-slate-400 mt-1">
                   {editUser 
                     ? 'Sandi tersimpan dengan enkripsi aman. Mengisi kolom ini akan langsung memperbarui sandi login pengguna.'
-                    : 'Format standar otomatis: Siswa = "siswa[NISN]", Ortu = "ortu[NISN]", Wali = "wali123#Secure".'}
+                    : 'Format standar otomatis: Siswa = "siswa[NIS]", Ortu = "ortu[NIS]", Wali = "wali123#Secure".'}
                 </p>
               </div>
 
@@ -2893,8 +3134,8 @@ export const AdminDashboard: React.FC = () => {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Username / NISN:</span>
-                <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{credentialModal.user.nisn || credentialModal.user.email}</span>
+                <span className="text-slate-500">Username (NIS):</span>
+                <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{credentialModal.user.nis || credentialModal.user.nisn || credentialModal.user.email}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Kata Sandi:</span>
@@ -2925,7 +3166,7 @@ export const AdminDashboard: React.FC = () => {
             <div className="space-y-2 pt-1">
               <button
                 onClick={() => {
-                  let text = `Kredensial 7 KAIH SMP Negeri 2 Kasihan\nNama Siswa: ${credentialModal.user.name}\nUsername: ${credentialModal.user.nisn || credentialModal.user.email}\nPassword: ${credentialModal.password}`;
+                  let text = `Kredensial 7 KAIH SMP Negeri 2 Kasihan\nNama Siswa: ${credentialModal.user.name}\nUsername (NIS): ${credentialModal.user.nis || credentialModal.user.nisn || credentialModal.user.email}\nPassword: ${credentialModal.password}`;
                   if (credentialModal.extraParent) {
                     text += `\n\nAkun Orang Tua:\nNama Ortu: ${credentialModal.extraParent.user.name}\nUsername Ortu: ${credentialModal.extraParent.user.email}\nPassword Ortu: ${credentialModal.extraParent.password}`;
                   }

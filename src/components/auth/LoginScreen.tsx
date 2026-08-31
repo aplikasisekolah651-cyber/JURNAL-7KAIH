@@ -76,13 +76,13 @@ export const LoginScreen: React.FC = () => {
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
-            {/* Username / NIS / Email */}
+            {/* Username / NIS */}
             <div>
               <label 
                 htmlFor="login-identifier" 
                 className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1.5"
               >
-                Username / NIS / Email
+                Username / NIS
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -94,7 +94,7 @@ export const LoginScreen: React.FC = () => {
                   required
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="Masukkan NIS siswa atau email akun..."
+                  placeholder="Masukkan NIS siswa atau username akun..."
                   className="block w-full pl-10 pr-3.5 py-3 min-h-[46px] text-xs sm:text-sm rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/60 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
                 />
               </div>
@@ -155,8 +155,8 @@ export const LoginScreen: React.FC = () => {
           {/* Quick Guidance Info for Mobile */}
           <div className="mt-5 p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
             <p className="font-bold text-indigo-900 dark:text-indigo-300">Panduan Masuk Cepat:</p>
-            <p>• <strong>Siswa</strong>: Gunakan <em>NIS</em> (Kata sandi awal: <code>siswa[NIS]</code>)</p>
-            <p>• <strong>Orang Tua</strong>: Gunakan <em>ortu.[NIS]@sekolah.id</em> (Sandi: <code>ortu[NIS]</code>)</p>
+            <p>• <strong>Siswa</strong>: Gunakan <em>NIS</em> (Kata sandi: <code>siswa[NIS]</code>)</p>
+            <p>• <strong>Orang Tua</strong>: Gunakan <em>ortu.[NIS]</em> (Kata sandi: <code>ortu[NIS]</code>)</p>
           </div>
 
           {/* Security Guarantee & School Footer */}

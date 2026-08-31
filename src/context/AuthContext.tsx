@@ -127,7 +127,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanPwd = password.trim();
 
     if (!cleaned || !cleanPwd) {
-      return { success: false, message: 'Harap isi username/NIS/email dan password.' };
+      return { success: false, message: 'Harap isi username/NIS dan password.' };
     }
 
     const found = allUsers.find((u) => {
@@ -182,7 +182,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         sNis && (
           cleaned === `siswa.${sNis}` ||
           cleaned === `siswa_${sNis}` ||
-          cleaned === `siswa${sNis}`
+          cleaned === `siswa${sNis}` ||
+          cleaned === sNis
         )
       );
 
@@ -199,7 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!found) {
       return { 
         success: false, 
-        message: 'Akun dengan username / email / NIS tersebut tidak ditemukan.' 
+        message: 'Akun dengan username / NIS tersebut tidak ditemukan.' 
       };
     }
 
@@ -532,7 +533,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const parentUser: User = {
         id: parentId,
         name: pName.includes('(Ortu') ? pName : `${pName} (Ortu ${cleanName})`,
-        email: `ortu.${cleanNis}@sekolah.id`,
+        email: `ortu.${cleanNis}`,
         role: 'orangtua',
         studentIds: [studentId],
         phone: item.parentPhone?.trim() || '08123456789',
@@ -550,7 +551,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const studentUser: User = {
         id: studentId,
         name: cleanName,
-        email: `${cleanNis}@sekolah.id`,
+        email: cleanNis,
         role: 'siswa',
         gender: cleanGender,
         nis: cleanNis,
@@ -579,14 +580,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return updated;
     });
 
-    // Realtime persistence to Firestore
+    // Realtime persistence to Firestore (chunked in safe batches of 400 operations)
     if (db) {
       try {
-        const batch = writeBatch(db);
-        [...newStudents, ...newParents].forEach(u => {
-          batch.set(doc(db, 'users', u.id), u);
-        });
-        await batch.commit();
+        const allNew = [...newStudents, ...newParents];
+        const chunkSize = 400;
+        for (let i = 0; i < allNew.length; i += chunkSize) {
+          const chunk = allNew.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          chunk.forEach(u => {
+            batch.set(doc(db, 'users', u.id), u);
+          });
+          await batch.commit();
+        }
       } catch (e) {
         console.warn('Firestore write batch fallback:', e);
       }
