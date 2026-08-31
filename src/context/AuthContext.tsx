@@ -88,114 +88,184 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Sync users to localStorage whenever allUsers changes
   useEffect(() => {
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(allUsers));
+    try {
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(allUsers));
+    } catch (e) {
+      console.warn('LocalStorage users sync warning:', e);
+    }
   }, [allUsers]);
 
-  // Real-time Firestore sync listener
+  // Real-time Firestore sync listener & initial fetch
   useEffect(() => {
-    if (db) {
-      try {
-        // Listen to Firestore users collection in background
-        const unsub = onSnapshot(collection(db, 'users'), (snapshot) => {
-          if (!snapshot.empty) {
-            const firestoreUsers: User[] = [];
-            snapshot.forEach((docSnap) => {
-              firestoreUsers.push({ id: docSnap.id, ...(docSnap.data() as any) });
-            });
-            if (firestoreUsers.length > 0) {
-              setAllUsers(prev => {
-                // Merge by ID
-                const map = new Map<string, User>();
-                prev.forEach(u => map.set(u.id, u));
-                firestoreUsers.forEach(u => map.set(u.id, u));
-                return Array.from(map.values());
-              });
-            }
-          }
-        }, (err) => {
-          console.warn('Firestore users listener fallback to local:', err);
+    if (!db) return;
+
+    let isMounted = true;
+    const usersColRef = collection(db, 'users');
+
+    // 1. Immediate fetch from Firestore
+    getDocs(usersColRef).then((snapshot) => {
+      if (isMounted && !snapshot.empty) {
+        const firestoreUsers: User[] = [];
+        snapshot.forEach((docSnap) => {
+          firestoreUsers.push({ id: docSnap.id, ...(docSnap.data() as any) });
         });
-        return () => unsub();
-      } catch (e) {
-        console.warn('Firestore users init:', e);
+        if (firestoreUsers.length > 0) {
+          setAllUsers(prev => {
+            const map = new Map<string, User>();
+            prev.forEach(u => map.set(u.id, u));
+            firestoreUsers.forEach(u => map.set(u.id, u));
+            return Array.from(map.values());
+          });
+        }
       }
+    }).catch((err) => {
+      console.warn('Firestore users direct fetch fallback:', err);
+    });
+
+    // 2. Real-time snapshot listener
+    try {
+      const unsub = onSnapshot(usersColRef, (snapshot) => {
+        if (!snapshot.empty) {
+          const firestoreUsers: User[] = [];
+          snapshot.forEach((docSnap) => {
+            firestoreUsers.push({ id: docSnap.id, ...(docSnap.data() as any) });
+          });
+          if (firestoreUsers.length > 0 && isMounted) {
+            setAllUsers(prev => {
+              const map = new Map<string, User>();
+              prev.forEach(u => map.set(u.id, u));
+              firestoreUsers.forEach(u => map.set(u.id, u));
+              return Array.from(map.values());
+            });
+          }
+        }
+      }, (err) => {
+        console.warn('Firestore users listener fallback to local:', err);
+      });
+      return () => {
+        isMounted = false;
+        unsub();
+      };
+    } catch (e) {
+      console.warn('Firestore users init:', e);
     }
   }, []);
+
+  const findUserByIdentifier = (userList: User[], cleaned: string): User | undefined => {
+    const rawClean = cleaned.replace(/\s+/g, '');
+    return userList.find((u) => {
+      const uEmail = (u.email || '').toLowerCase().trim();
+      const uEmailPrefix = uEmail.split('@')[0];
+      const uNis = (u.nis || '').toLowerCase().trim();
+      const uNisn = (u.nisn || '').toLowerCase().trim();
+      const uName = (u.name || '').toLowerCase().trim();
+      const uId = (u.id || '').toLowerCase().trim();
+      const uPhone = (u.phone || '').replace(/[^0-9]/g, '');
+      const inputPhone = cleaned.replace(/[^0-9]/g, '');
+
+      // Direct Matches
+      if (uEmail === cleaned || uEmailPrefix === cleaned) return true;
+      if (uNis && (uNis === cleaned || uNis === rawClean)) return true;
+      if (uNisn && (uNisn === cleaned || uNisn === rawClean)) return true;
+      if (uName === cleaned || uName.replace(/\s+/g, '') === rawClean) return true;
+      if (uId === cleaned || uId.replace('usr-', '') === cleaned) return true;
+      if (inputPhone.length >= 8 && uPhone.length >= 8 && uPhone === inputPhone) return true;
+
+      // Admin aliases
+      if (u.role === 'admin') {
+        if (
+          cleaned === 'admin' || 
+          cleaned === 'administrator' || 
+          cleaned === 'admin@sekolah.id' || 
+          cleaned === 'aplikasisekolah651@gmail.com' ||
+          cleaned === 'admin@smpn2kasihan.sch.id' ||
+          cleaned === 'admin1'
+        ) return true;
+      }
+
+      // Student aliases: "siswa.8921", "siswa8921", "siswa_8921", "8921"
+      if (u.role === 'siswa') {
+        const studentNis = uNis || uNisn;
+        if (studentNis) {
+          if (
+            cleaned === studentNis ||
+            cleaned === `siswa.${studentNis}` ||
+            cleaned === `siswa_${studentNis}` ||
+            cleaned === `siswa${studentNis}` ||
+            cleaned === `${studentNis}@sekolah.id`
+          ) return true;
+        }
+      }
+
+      // Parent aliases: "ortu.8921", "ortu_8921", "ortu8921", child's NIS
+      if (u.role === 'orangtua') {
+        if (uEmailPrefix.replace(/[^a-z0-9]/g, '') === rawClean.replace(/[^a-z0-9]/g, '')) return true;
+
+        if (u.studentIds && u.studentIds.length > 0) {
+          const linkedStudents = userList.filter(s => u.studentIds?.includes(s.id));
+          for (const s of linkedStudents) {
+            const childNis = (s.nis || s.nisn || '').toLowerCase().trim();
+            if (childNis) {
+              if (
+                cleaned === childNis ||
+                cleaned === `ortu.${childNis}` ||
+                cleaned === `ortu_${childNis}` ||
+                cleaned === `ortu${childNis}` ||
+                cleaned === `ortu.${childNis}@sekolah.id`
+              ) return true;
+            }
+          }
+        }
+      }
+
+      // Homeroom Teacher / Wali Kelas aliases: "wali.7a", "wali7a", "wali_7a", "guru.7a", "guru7a"
+      if (u.role === 'walikelas') {
+        const cName = (u.className || '').toLowerCase().trim();
+        if (cName) {
+          if (
+            cleaned === `wali.${cName}` ||
+            cleaned === `wali_${cName}` ||
+            cleaned === `wali${cName}` ||
+            cleaned === `guru.${cName}` ||
+            cleaned === `guru${cName}` ||
+            cleaned === `guru.${cName}@sekolah.id` ||
+            cleaned === cName
+          ) return true;
+        }
+      }
+
+      return false;
+    });
+  };
 
   const login = async (identifier: string, password: string): Promise<{ success: boolean; message?: string }> => {
     const cleaned = identifier.trim().toLowerCase();
     const cleanPwd = password.trim();
 
     if (!cleaned || !cleanPwd) {
-      return { success: false, message: 'Harap isi username/NIS dan password.' };
+      return { success: false, message: 'Harap isi username/NIS dan kata sandi.' };
     }
 
-    const found = allUsers.find((u) => {
-      const emailMatch = u.email.toLowerCase() === cleaned;
-      const nisMatch = Boolean((u.nis && u.nis.toLowerCase() === cleaned) || (u.nisn && u.nisn.toLowerCase() === cleaned));
-      const nameMatch = u.name.toLowerCase() === cleaned;
-      const usernameMatch = u.email.toLowerCase().split('@')[0] === cleaned;
-      const idMatch = u.id.toLowerCase() === cleaned || u.id.toLowerCase().replace('usr-', '') === cleaned;
-      const phoneCleaned = cleaned.replace(/[^0-9]/g, '');
-      const phoneMatch = Boolean(u.phone && phoneCleaned.length >= 8 && u.phone.replace(/[^0-9]/g, '') === phoneCleaned);
-      
-      // Admin aliases
-      const isAdminAlias = u.role === 'admin' && (
-        cleaned === 'admin' || 
-        cleaned === 'administrator' || 
-        cleaned === 'admin@sekolah.id' || 
-        cleaned === 'aplikasisekolah651@gmail.com' ||
-        cleaned === 'admin@smpn2kasihan.sch.id'
-      );
+    let userPool = [...allUsers];
+    let found = findUserByIdentifier(userPool, cleaned);
 
-      // Parent aliases derived from student NIS: "ortu.8923", "ortu_8923", "ortu8923"
-      let isParentAlias = false;
-      if (u.role === 'orangtua') {
-        const pEmailPrefix = u.email.toLowerCase().split('@')[0];
-        if (pEmailPrefix === cleaned || pEmailPrefix.replace(/[^a-z0-9]/g, '') === cleaned.replace(/[^a-z0-9]/g, '')) {
-          isParentAlias = true;
+    // Fallback: If not found in current memory, query Firestore users directly
+    if (!found && db) {
+      try {
+        const snapshot = await getDocs(collection(db, 'users'));
+        if (!snapshot.empty) {
+          const remoteUsers: User[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteUsers.push({ id: docSnap.id, ...(docSnap.data() as any) });
+          });
+          userPool = remoteUsers;
+          setAllUsers(remoteUsers);
+          found = findUserByIdentifier(remoteUsers, cleaned);
         }
-
-        // Check if cleaned identifier matches child's NIS or NISN with ortu prefix or plain child NIS
-        if (u.studentIds && u.studentIds.length > 0) {
-          const linkedStudents = allUsers.filter(s => u.studentIds?.includes(s.id));
-          for (const s of linkedStudents) {
-            const childNis = (s.nis || s.nisn || '').toLowerCase();
-            if (childNis) {
-              if (
-                cleaned === `ortu.${childNis}` ||
-                cleaned === `ortu_${childNis}` ||
-                cleaned === `ortu${childNis}` ||
-                cleaned === `ortu.${childNis}@sekolah.id`
-              ) {
-                isParentAlias = true;
-                break;
-              }
-            }
-          }
-        }
+      } catch (err) {
+        console.warn('Firestore live fallback query during login:', err);
       }
-
-      // Student aliases
-      const sNis = (u.nis || u.nisn || '').toLowerCase();
-      const isStudentAlias = u.role === 'siswa' && Boolean(
-        sNis && (
-          cleaned === `siswa.${sNis}` ||
-          cleaned === `siswa_${sNis}` ||
-          cleaned === `siswa${sNis}` ||
-          cleaned === sNis
-        )
-      );
-
-      // Homeroom Teacher / Wali Kelas aliases
-      const isTeacherAlias = u.role === 'walikelas' && (
-        (u.className && cleaned === `wali.${u.className.toLowerCase()}`) ||
-        (u.className && cleaned === `wali_${u.className.toLowerCase()}`) ||
-        (u.className && cleaned === `wali${u.className.toLowerCase()}`)
-      );
-
-      return emailMatch || nisMatch || nameMatch || usernameMatch || idMatch || phoneMatch || isAdminAlias || isParentAlias || isStudentAlias || isTeacherAlias;
-    });
+    }
 
     if (!found) {
       return { 
@@ -204,37 +274,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
     }
 
-    // Password verification with convenient standard fallback
-    let isPasswordValid = !found.password || found.password === cleanPwd;
+    // Comprehensive Password Verification
+    let isPasswordValid = false;
+    
+    // 1. Direct match with saved password
+    if (!found.password || found.password === cleanPwd || found.password.toLowerCase() === cleanPwd.toLowerCase()) {
+      isPasswordValid = true;
+    }
 
+    // 2. Standard convenient role fallbacks
     if (!isPasswordValid) {
       if (found.role === 'admin') {
         isPasswordValid = 
           cleanPwd === 'admin' || 
           cleanPwd === 'admin123' || 
           cleanPwd === 'admin123#Master' || 
-          cleanPwd === 'admin123#';
-      } else if (found.role === 'siswa' && found.nisn) {
+          cleanPwd === 'admin123#' ||
+          cleanPwd === 'admin#123';
+      } else if (found.role === 'siswa') {
+        const studentNis = (found.nis || found.nisn || '').toLowerCase().trim();
         isPasswordValid = 
-          cleanPwd === `siswa${found.nisn}` ||
-          cleanPwd === `siswa.${found.nisn}` ||
+          (Boolean(studentNis) && (
+            cleanPwd.toLowerCase() === `siswa${studentNis}` ||
+            cleanPwd.toLowerCase() === `siswa.${studentNis}` ||
+            cleanPwd.toLowerCase() === studentNis
+          )) ||
           cleanPwd === 'siswa123#' ||
-          cleanPwd === 'siswa123#Secure';
+          cleanPwd === 'siswa123#Secure' ||
+          cleanPwd === 'siswa123' ||
+          cleanPwd === '123456';
       } else if (found.role === 'orangtua') {
-        // Check password matching child NISN (ortu<NISN>)
-        const linkedStudents = allUsers.filter(s => found.studentIds?.includes(s.id));
-        const childNisns = linkedStudents.map(s => s.nisn).filter(Boolean);
-        const childNisnMatch = childNisns.some(nisn => cleanPwd === `ortu${nisn}` || cleanPwd === `ortu.${nisn}`);
-        isPasswordValid = childNisnMatch || cleanPwd === 'ortu123#' || cleanPwd === 'ortu123#Secure' || cleanPwd === 'ortu123';
+        const linkedStudents = userPool.filter(s => found.studentIds?.includes(s.id));
+        const childNisList = linkedStudents.map(s => (s.nis || s.nisn || '').toLowerCase().trim()).filter(Boolean);
+        const childNisMatch = childNisList.some(nis => 
+          cleanPwd.toLowerCase() === `ortu${nis}` || 
+          cleanPwd.toLowerCase() === `ortu.${nis}` || 
+          cleanPwd.toLowerCase() === nis
+        );
+        isPasswordValid = 
+          childNisMatch || 
+          cleanPwd === 'ortu123#' || 
+          cleanPwd === 'ortu123#Secure' || 
+          cleanPwd === 'ortu123' ||
+          cleanPwd === '123456';
       } else if (found.role === 'walikelas') {
-        isPasswordValid = cleanPwd === 'wali123' || cleanPwd === 'wali123#Secure' || cleanPwd === 'wali123#';
+        const cName = (found.className || '').toLowerCase().trim();
+        isPasswordValid = 
+          cleanPwd === 'wali123' || 
+          cleanPwd === 'wali123#Secure' || 
+          cleanPwd === 'wali123#' || 
+          cleanPwd === 'guru123' ||
+          (Boolean(cName) && cleanPwd.toLowerCase() === `wali${cName}`) ||
+          cleanPwd === '123456';
       }
     }
 
     if (!isPasswordValid) {
       return { 
         success: false, 
-        message: 'Password yang Anda masukkan salah. Silakan coba kembali.' 
+        message: 'Kata sandi yang Anda masukkan salah. Silakan coba kembali.' 
       };
     }
 

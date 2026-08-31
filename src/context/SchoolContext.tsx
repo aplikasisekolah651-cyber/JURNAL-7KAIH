@@ -2,12 +2,13 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { SchoolSettings } from '../types';
 import { DEFAULT_SCHOOL_SETTINGS } from '../lib/constants';
 import { db } from '../lib/firebase';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
 
 interface SchoolContextType {
   schoolSettings: SchoolSettings;
   updateSchoolSettings: (updates: Partial<SchoolSettings>) => Promise<void>;
   resetSchoolSettings: () => Promise<void>;
+  isSyncedWithDb: boolean;
 }
 
 const SchoolContext = createContext<SchoolContextType | undefined>(undefined);
@@ -15,6 +16,7 @@ const SchoolContext = createContext<SchoolContextType | undefined>(undefined);
 const SCHOOL_SETTINGS_STORAGE_KEY = '7kaih_school_settings_v1';
 
 export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [isSyncedWithDb, setIsSyncedWithDb] = useState(false);
   const [schoolSettings, setSchoolSettings] = useState<SchoolSettings>(() => {
     const saved = localStorage.getItem(SCHOOL_SETTINGS_STORAGE_KEY);
     if (saved) {
@@ -30,41 +32,74 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Local storage backup
   useEffect(() => {
-    localStorage.setItem(SCHOOL_SETTINGS_STORAGE_KEY, JSON.stringify(schoolSettings));
+    try {
+      localStorage.setItem(SCHOOL_SETTINGS_STORAGE_KEY, JSON.stringify(schoolSettings));
+    } catch (e) {
+      console.warn('Local storage quota warning:', e);
+    }
   }, [schoolSettings]);
 
-  // Firestore real-time sync listener
+  // Firestore real-time sync listener & immediate initial fetch
   useEffect(() => {
-    if (db) {
-      try {
-        const unsub = onSnapshot(doc(db, 'settings', 'school'), (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data() as Partial<SchoolSettings>;
+    if (!db) return;
+
+    let isMounted = true;
+    const settingsDocRef = doc(db, 'settings', 'school');
+
+    // 1. Immediate fetch from Cloud Firestore Database
+    getDoc(settingsDocRef).then((docSnap) => {
+      if (isMounted && docSnap.exists()) {
+        const data = docSnap.data() as Partial<SchoolSettings>;
+        setSchoolSettings(prev => ({
+          ...prev,
+          ...data
+        }));
+        setIsSyncedWithDb(true);
+      }
+    }).catch((err) => {
+      console.warn('Firestore school settings direct fetch fallback:', err);
+    });
+
+    // 2. Real-time onSnapshot listener
+    try {
+      const unsub = onSnapshot(settingsDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data() as Partial<SchoolSettings>;
+          if (isMounted) {
             setSchoolSettings(prev => ({
               ...prev,
               ...data
             }));
+            setIsSyncedWithDb(true);
           }
-        }, (err) => {
-          console.warn('Firestore school settings listener fallback:', err);
-        });
-        return () => unsub();
-      } catch (e) {
-        console.warn('Firestore school settings init:', e);
-      }
+        }
+      }, (err) => {
+        console.warn('Firestore school settings listener fallback:', err);
+      });
+      return () => {
+        isMounted = false;
+        unsub();
+      };
+    } catch (e) {
+      console.warn('Firestore school settings init error:', e);
     }
   }, []);
 
   const updateSchoolSettings = async (updates: Partial<SchoolSettings>) => {
     setSchoolSettings((prev) => {
       const updated = { ...prev, ...updates };
-      localStorage.setItem(SCHOOL_SETTINGS_STORAGE_KEY, JSON.stringify(updated));
+      try {
+        localStorage.setItem(SCHOOL_SETTINGS_STORAGE_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Local storage write warning:', e);
+      }
       return updated;
     });
 
     if (db) {
       try {
         await setDoc(doc(db, 'settings', 'school'), updates, { merge: true });
+        setIsSyncedWithDb(true);
       } catch (e) {
         console.warn('Firestore school settings write fallback:', e);
       }
@@ -73,7 +108,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const resetSchoolSettings = async () => {
     setSchoolSettings(DEFAULT_SCHOOL_SETTINGS);
-    localStorage.removeItem(SCHOOL_SETTINGS_STORAGE_KEY);
+    try {
+      localStorage.removeItem(SCHOOL_SETTINGS_STORAGE_KEY);
+    } catch (e) {
+      console.warn('Local storage remove warning:', e);
+    }
     if (db) {
       try {
         await setDoc(doc(db, 'settings', 'school'), DEFAULT_SCHOOL_SETTINGS);
@@ -88,7 +127,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       value={{
         schoolSettings,
         updateSchoolSettings,
-        resetSchoolSettings
+        resetSchoolSettings,
+        isSyncedWithDb
       }}
     >
       {children}

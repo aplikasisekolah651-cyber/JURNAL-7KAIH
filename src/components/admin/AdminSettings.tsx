@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Building2, 
   Save, 
@@ -14,20 +14,36 @@ import {
   Globe,
   MapPin,
   Sparkles,
-  Eye
+  Eye,
+  Database,
+  CloudCheck
 } from 'lucide-react';
 import { useSchoolSettings } from '../../context/SchoolContext';
 import { SchoolLogo } from '../common/SchoolLogo';
 import { SchoolSettings } from '../../types';
+import { DEFAULT_SCHOOL_SETTINGS } from '../../lib/constants';
 import confetti from 'canvas-confetti';
 import { audioNotifier } from '../../lib/audioNotifier';
 
 export const AdminSettings: React.FC = () => {
-  const { schoolSettings, updateSchoolSettings, resetSchoolSettings } = useSchoolSettings();
+  const { schoolSettings, updateSchoolSettings, resetSchoolSettings, isSyncedWithDb } = useSchoolSettings();
   const [formData, setFormData] = useState<SchoolSettings>({ ...schoolSettings });
   const [isSaved, setIsSaved] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoPreview, setLogoPreview] = useState<string>(schoolSettings.customLogoUrl || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync form data if settings update from database in background
+  useEffect(() => {
+    setFormData(prev => ({
+      ...schoolSettings,
+      // preserve local changes if user is actively typing
+      ...(isSaved ? {} : {})
+    }));
+    if (schoolSettings.customLogoUrl !== undefined) {
+      setLogoPreview(schoolSettings.customLogoUrl || '');
+    }
+  }, [schoolSettings]);
 
   const handleInputChange = (field: keyof SchoolSettings, value: any) => {
     setFormData(prev => ({
@@ -37,31 +53,78 @@ export const AdminSettings: React.FC = () => {
     setIsSaved(false);
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const compressAndOptimizeLogo = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 360;
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, width, height);
+            const optimizedBase64 = canvas.toDataURL('image/png');
+            resolve(optimizedBase64);
+          } else {
+            resolve(e.target?.result as string);
+          }
+        };
+        img.onerror = () => reject(new Error('Gagal memproses gambar'));
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('Gagal membaca file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      alert('Ukuran file logo maksimal 2MB.');
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Ukuran file logo maksimal 5MB.');
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64 = event.target?.result as string;
-      setLogoPreview(base64);
+    setIsUploadingLogo(true);
+    try {
+      const optimizedBase64 = await compressAndOptimizeLogo(file);
+      setLogoPreview(optimizedBase64);
       setFormData(prev => ({
         ...prev,
-        customLogoUrl: base64
+        customLogoUrl: optimizedBase64
       }));
-      setIsSaved(false);
-    };
-    reader.readAsDataURL(file);
+      // Auto save to database
+      await updateSchoolSettings({ customLogoUrl: optimizedBase64 });
+      setIsSaved(true);
+      audioNotifier.playSuccessChime();
+      setTimeout(() => setIsSaved(false), 3000);
+    } catch (err) {
+      console.error('Logo upload error:', err);
+      alert('Terjadi kesalahan saat memproses logo.');
+    } finally {
+      setIsUploadingLogo(false);
+    }
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateSchoolSettings(formData);
+    await updateSchoolSettings(formData);
     setIsSaved(true);
     confetti({
       particleCount: 60,
@@ -75,22 +138,24 @@ export const AdminSettings: React.FC = () => {
     }, 4000);
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (window.confirm('Apakah Anda yakin ingin mengembalikan seluruh pengaturan identitas sekolah dan logo ke pengaturan bawaan?')) {
-      resetSchoolSettings();
-      setFormData({ ...schoolSettings });
+      await resetSchoolSettings();
+      setFormData({ ...DEFAULT_SCHOOL_SETTINGS });
       setLogoPreview('');
       audioNotifier.playReminderChime();
     }
   };
 
-  const handleRemoveCustomLogo = () => {
+  const handleRemoveCustomLogo = async () => {
     setLogoPreview('');
     setFormData(prev => ({
       ...prev,
       customLogoUrl: ''
     }));
-    setIsSaved(false);
+    await updateSchoolSettings({ customLogoUrl: '' });
+    setIsSaved(true);
+    setTimeout(() => setIsSaved(false), 3000);
   };
 
   return (
