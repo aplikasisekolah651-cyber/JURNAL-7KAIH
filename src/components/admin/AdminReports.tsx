@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, 
   Printer, 
@@ -69,10 +69,20 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
   const availableClasses = useMemo(() => {
     const classSet = new Set<string>();
     students.forEach(s => {
-      if (s.className) classSet.add(s.className);
+      if (s.className && s.className.trim()) classSet.add(s.className.trim());
     });
-    return Array.from(classSet).sort();
+    if (classSet.size === 0) {
+      return ['7A', '7B', '8A', '9A'];
+    }
+    return Array.from(classSet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
   }, [students]);
+
+  // Keep selected collective class in sync with available classes
+  useEffect(() => {
+    if (availableClasses.length > 0 && !availableClasses.includes(selectedClassForCollect)) {
+      setSelectedClassForCollect(availableClasses[0]);
+    }
+  }, [availableClasses, selectedClassForCollect]);
 
   // Filtered Students for Individual Mode
   const filteredStudents = useMemo(() => {
@@ -338,7 +348,7 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
                 type="text"
-                placeholder="Cari nama / NISN siswa..."
+                placeholder="Cari nama / NIS siswa..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 outline-none focus:border-purple-500"
@@ -371,7 +381,13 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
                       <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400">
                         <span>{s.className || '7A'}</span>
                         <span>•</span>
-                        <span className="font-mono">NISN: {s.nisn || '-'}</span>
+                        <span className="font-mono">NIS: {s.nis || s.nisn || '-'}</span>
+                        {(s.attendanceNumber || s.noAbsen) && (
+                          <>
+                            <span>•</span>
+                            <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">No. {s.attendanceNumber || s.noAbsen}</span>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -407,7 +423,11 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
                         {selectedStudent.name}
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        NISN: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{selectedStudent.nisn || '0089234512'}</strong> • {selectedStudent.className || '7A'}
+                        NIS: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{selectedStudent.nis || selectedStudent.nisn || '0089234512'}</strong>
+                        {(selectedStudent.attendanceNumber || selectedStudent.noAbsen) && (
+                          <span> • No. Absen: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{selectedStudent.attendanceNumber || selectedStudent.noAbsen}</strong></span>
+                        )}
+                        <span> • {selectedStudent.className || '7A'}</span>
                       </p>
                     </div>
                   </div>
@@ -618,7 +638,8 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
                 <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase text-[9px] font-bold">
                   <tr>
                     <th className="p-3 text-center w-12">No</th>
-                    <th className="p-3">NISN</th>
+                    <th className="p-3">NIS</th>
+                    <th className="p-3 text-center">No Absen</th>
                     <th className="p-3">Nama Siswa</th>
                     <th className="p-3 text-center">Jurnal</th>
                     <th className="p-3 text-center">Skor Rerata</th>
@@ -630,7 +651,7 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {classStudentRows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="p-6 text-center text-slate-400 text-xs">
+                      <td colSpan={9} className="p-6 text-center text-slate-400 text-xs">
                         Tidak ada siswa terdaftar di {selectedClassForCollect}.
                       </td>
                     </tr>
@@ -638,7 +659,8 @@ export const AdminReports: React.FC<AdminReportsProps> = () => {
                     classStudentRows.map((row, idx) => (
                       <tr key={row.student.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                         <td className="p-3 text-center font-mono text-slate-400">{idx + 1}</td>
-                        <td className="p-3 font-mono text-slate-600 dark:text-slate-300">{row.student.nisn || '-'}</td>
+                        <td className="p-3 font-mono text-slate-600 dark:text-slate-300">{row.student.nis || row.student.nisn || '-'}</td>
+                        <td className="p-3 text-center font-mono text-indigo-600 dark:text-indigo-400 font-bold">{row.student.attendanceNumber || row.student.noAbsen || '-'}</td>
                         <td className="p-3 font-bold text-slate-900 dark:text-white">{row.student.name}</td>
                         <td className="p-3 text-center">{row.entriesCount} Hari</td>
                         <td className="p-3 text-center font-bold text-indigo-600 dark:text-indigo-400">{row.score}%</td>

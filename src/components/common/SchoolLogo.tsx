@@ -5,21 +5,29 @@ interface SchoolLogoProps {
   className?: string;
   size?: number | string;
   forceSvg?: boolean;
+  customLogoUrl?: string;
 }
 
-export const SchoolLogo: React.FC<SchoolLogoProps> = ({ className = "w-16 h-16", size, forceSvg = false }) => {
-  let customLogoUrl = '';
+export const SchoolLogo: React.FC<SchoolLogoProps> = ({ 
+  className = "w-16 h-16", 
+  size, 
+  forceSvg = false,
+  customLogoUrl: customLogoProp
+}) => {
+  let contextLogoUrl = '';
   try {
     const settingsContext = useSchoolSettings();
-    customLogoUrl = settingsContext?.schoolSettings?.customLogoUrl || '';
+    contextLogoUrl = settingsContext?.schoolSettings?.customLogoUrl || '';
   } catch (e) {
     // Context fallback if used outside provider
   }
 
-  if (customLogoUrl && !forceSvg) {
+  const effectiveLogoUrl = customLogoProp || contextLogoUrl;
+
+  if (effectiveLogoUrl && !forceSvg) {
     return (
       <img
-        src={customLogoUrl}
+        src={effectiveLogoUrl}
         alt="Logo Sekolah"
         className={`${className} object-contain rounded-lg`}
         style={size ? { width: size, height: size } : undefined}

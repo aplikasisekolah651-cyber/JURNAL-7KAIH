@@ -32,41 +32,61 @@ import {
   Building2,
   BookOpen,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+  CheckSquare,
+  Square
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, normalizeClassName } from '../../context/AuthContext';
 import { useJournal } from '../../context/JournalContext';
 import { useSchoolSettings } from '../../context/SchoolContext';
 import { User, UserRole } from '../../types';
 import { E2EEService } from '../../lib/crypto';
 import { E2EEBadge } from '../common/E2EEBadge';
 import { SCHOOL_CONFIG } from '../../lib/constants';
+import { UserAvatar } from '../common/UserAvatar';
+import { 
+  DATA_URI_SISWA_PUTRA, 
+  DATA_URI_SISWA_PUTRI, 
+  DATA_URI_ORANG_TUA, 
+  DATA_URI_WALI_KELAS, 
+  DATA_URI_ADMIN 
+} from '../../lib/avatarHelper';
 import { AdminSettings } from './AdminSettings';
 import { AdminReports } from './AdminReports';
+import { AdminJournalMonitoring } from './AdminJournalMonitoring';
 import { PDFReportGenerator } from '../../lib/pdfGenerator';
 import * as XLSX from 'xlsx';
 
-type AdminMenuKey = 'overview' | 'students' | 'parents' | 'teachers' | 'reports' | 'import' | 'credentials' | 'settings' | 'database';
-
-const AVAILABLE_CLASSES = [
-  '7A',
-  '7B',
-  '7C',
-  '7D',
-  '8A',
-  '8B',
-  '8C',
-  '8D',
-  '9A',
-  '9B',
-  '9C',
-  '9D',
-];
+type AdminMenuKey = 'overview' | 'students' | 'parents' | 'teachers' | 'journals' | 'reports' | 'import' | 'credentials' | 'settings' | 'database';
 
 export const AdminDashboard: React.FC = () => {
-  const { allUsers, addUser, updateUser, deleteUser, importStudentsBulk, generateNewCredentials } = useAuth();
+  const { allUsers, addUser, updateUser, deleteUser, deleteUsersBulk, importStudentsBulk, generateNewCredentials } = useAuth();
   const { journals, getStudentJournals } = useJournal();
   const { schoolSettings } = useSchoolSettings();
+
+  // Dynamically extract all available classes strictly matching imported students
+  const availableClasses = useMemo(() => {
+    const classSet = new Set<string>();
+    
+    // Extract classes directly from all registered students
+    const students = allUsers.filter(u => u.role === 'siswa');
+    students.forEach(s => {
+      if (s.className && s.className.trim()) {
+        classSet.add(s.className.trim());
+      }
+    });
+
+    // Fallback only if no students are present in the system
+    if (classSet.size === 0) {
+      return ['7A', '7B', '8A', '9A'];
+    }
+
+    return Array.from(classSet).sort((a, b) => 
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+  }, [allUsers]);
 
   // Excel File Input Ref
   const excelFileInputRef = React.useRef<HTMLInputElement>(null);
@@ -76,13 +96,21 @@ export const AdminDashboard: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<AdminMenuKey>('overview');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
-  // Student Filter States
+  // Student Filter & Pagination & Bulk Selection States
   const [selectedClass, setSelectedClass] = useState<string>('all');
   const [studentSearch, setStudentSearch] = useState('');
+  const [studentPage, setStudentPage] = useState(1);
+  const [studentPageSize, setStudentPageSize] = useState(10);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
 
-  // Parent & Teacher Search and Filter States
+  // Parent Filter & Pagination & Bulk Selection States
   const [parentSearch, setParentSearch] = useState('');
   const [parentSelectedClass, setParentSelectedClass] = useState<string>('all');
+  const [parentPage, setParentPage] = useState(1);
+  const [parentPageSize, setParentPageSize] = useState(10);
+  const [selectedParentIds, setSelectedParentIds] = useState<string[]>([]);
+
+  // Teacher Search State
   const [teacherSearch, setTeacherSearch] = useState('');
 
   // Modals
@@ -92,11 +120,28 @@ export const AdminDashboard: React.FC = () => {
   const [deleteModal, setDeleteModal] = useState<{ open: boolean; user: User | null }>({ open: false, user: null });
   const [deletingUser, setDeletingUser] = useState(false);
 
+  // Bulk Delete Modal State
+  const [bulkDeleteModal, setBulkDeleteModal] = useState<{
+    open: boolean;
+    role: 'siswa' | 'orangtua';
+    ids: string[];
+    count: number;
+    title: string;
+  }>({
+    open: false,
+    role: 'siswa',
+    ids: [],
+    count: 0,
+    title: ''
+  });
+  const [deletingBulk, setDeletingBulk] = useState(false);
+
   // Form State
   const [formData, setFormData] = useState<{
     name: string;
     email: string;
     nisn: string;
+    noAbsen: string;
     gender: 'L' | 'P';
     className: string;
     phone: string;
@@ -109,6 +154,7 @@ export const AdminDashboard: React.FC = () => {
     name: '',
     email: '',
     nisn: '',
+    noAbsen: '',
     gender: 'L',
     className: '7A',
     phone: '',
@@ -126,11 +172,11 @@ export const AdminDashboard: React.FC = () => {
 
   // Bulk Import States
   const [importText, setImportText] = useState(
-`0089234516, Muhammad Faiz Al-Farisi, L, 7A, Bpk. Bambang Al-Farisi, 081234567810
-0089234517, Siti Aisyah Nurhaliza, P, 7A, Ibu Nurhayati, 081234567811
-0089234518, Rendy Pratama Putra, L, 7B, Bpk. Joko Susilo, 081234567812
-0089234519, Dwi Lestari Ramadhani, P, 7B, Ibu Sri Mulyani, 081234567813
-0089234520, Bagas Satria Yudha, L, 8A, Bpk. Tri Wibowo, 081234567814`
+`23451, 01, Muhammad Faiz Al-Farisi, L, 7A, Bpk. Bambang Al-Farisi, 081234567810
+23452, 02, Siti Aisyah Nurhaliza, P, 7A, Ibu Nurhayati, 081234567811
+23453, 03, Rendy Pratama Putra, L, 7B, Bpk. Joko Susilo, 081234567812
+23454, 04, Dwi Lestari Ramadhani, P, 7B, Ibu Sri Mulyani, 081234567813
+23455, 05, Bagas Satria Yudha, L, 8A, Bpk. Tri Wibowo, 081234567814`
   );
   const [importing, setImporting] = useState(false);
   const [importSuccessCount, setImportSuccessCount] = useState<number | null>(null);
@@ -147,56 +193,96 @@ export const AdminDashboard: React.FC = () => {
   const teachers = useMemo(() => allUsers.filter(u => u.role === 'walikelas'), [allUsers]);
   const admins = useMemo(() => allUsers.filter(u => u.role === 'admin'), [allUsers]);
 
+  // Helper parser for single student import row/line
+  const parseImportLine = (line: string) => {
+    const parts = line.split(',').map(s => s.trim());
+    const nis = parts[0] || '';
+    let noAbsen = '';
+    let name = '';
+    let gender: 'L' | 'P' = 'L';
+    let className = '7A';
+    let parentName = '';
+    let parentPhone = '';
+
+    if (parts.length >= 7) {
+      const isPart1Absen = /^\d{1,3}$/.test(parts[1]);
+      if (isPart1Absen) {
+        noAbsen = parts[1];
+        name = parts[2] || '';
+        const gStr = (parts[3] || '').toUpperCase();
+        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
+        className = normalizeClassName(parts[4]);
+        parentName = parts[5] || '';
+        parentPhone = parts[6] || '';
+      } else {
+        name = parts[1] || '';
+        noAbsen = parts[2] || '';
+        const gStr = (parts[3] || '').toUpperCase();
+        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
+        className = normalizeClassName(parts[4]);
+        parentName = parts[5] || '';
+        parentPhone = parts[6] || '';
+      }
+    } else if (parts.length === 6) {
+      const isPart1Absen = /^\d{1,3}$/.test(parts[1]);
+      if (isPart1Absen) {
+        noAbsen = parts[1];
+        name = parts[2] || '';
+        const gStr = (parts[3] || '').toUpperCase();
+        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
+        className = normalizeClassName(parts[4]);
+        parentName = parts[5] || '';
+      } else {
+        name = parts[1] || '';
+        const gStr = (parts[2] || '').toUpperCase();
+        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
+        className = normalizeClassName(parts[3]);
+        parentName = parts[4] || '';
+        parentPhone = parts[5] || '';
+      }
+    } else {
+      name = parts[1] || '';
+      const part2 = parts[2] || '';
+      if (part2.toUpperCase() === 'L' || part2.toUpperCase() === 'P') {
+        gender = part2.toUpperCase() === 'P' ? 'P' : 'L';
+        className = normalizeClassName(parts[3]);
+        parentName = parts[4] || '';
+      } else {
+        className = normalizeClassName(part2);
+        parentName = parts[3] || '';
+        parentPhone = parts[4] || '';
+      }
+    }
+
+    const pAutoName = parentName || (name ? `Orang Tua dari ${name}` : '');
+    const isValid = nis.length >= 3 && name.length >= 2;
+
+    return {
+      nis,
+      nisn: nis,
+      noAbsen,
+      attendanceNumber: noAbsen,
+      name,
+      gender,
+      className,
+      studentUsername: `${nis}@sekolah.id`,
+      studentPassword: `siswa${nis}`,
+      parentName: pAutoName,
+      parentPhone,
+      parentUsername: `ortu.${nis}@sekolah.id`,
+      parentPassword: `ortu${nis}`,
+      isValid
+    };
+  };
+
   // Live parsing preview for bulk import
   const parsedImportPreview = useMemo(() => {
     const lines = importText.trim().split('\n').filter(l => l.trim().length > 0);
     return lines.map((line, idx) => {
-      const parts = line.split(',').map(s => s.trim());
-      const nisn = parts[0] || '';
-      const name = parts[1] || '';
-      
-      // Determine if format has 6 columns (with gender) or 5 columns
-      let gender: 'L' | 'P' = 'L';
-      let className = '7A';
-      let parentName = '';
-      let parentPhone = '';
-
-      if (parts.length >= 6) {
-        const gStr = (parts[2] || '').toUpperCase();
-        gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
-        className = parts[3]?.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-        parentName = parts[4] || '';
-        parentPhone = parts[5] || '';
-      } else {
-        // 5 columns or less fallback
-        const part2 = parts[2] || '';
-        if (part2.toUpperCase() === 'L' || part2.toUpperCase() === 'P') {
-          gender = part2.toUpperCase() === 'P' ? 'P' : 'L';
-          className = parts[3]?.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-          parentName = parts[4] || '';
-        } else {
-          className = part2?.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-          parentName = parts[3] || '';
-          parentPhone = parts[4] || '';
-        }
-      }
-
-      const pAutoName = parentName || (name ? `Orang Tua dari ${name}` : '');
-      const isValid = nisn.length >= 4 && name.length >= 2;
-
+      const parsed = parseImportLine(line);
       return {
         idx: idx + 1,
-        nisn,
-        name,
-        gender,
-        className,
-        studentUsername: `${nisn}@sekolah.id`,
-        studentPassword: `siswa${nisn}`,
-        parentName: pAutoName,
-        parentPhone,
-        parentUsername: `ortu.${nisn}@sekolah.id`,
-        parentPassword: `ortu${nisn}`,
-        isValid
+        ...parsed
       };
     });
   }, [importText]);
@@ -206,7 +292,10 @@ export const AdminDashboard: React.FC = () => {
     return students.filter(s => {
       const matchClass = selectedClass === 'all' || s.className === selectedClass;
       const matchSearch = s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
+                          (s.nis && s.nis.includes(studentSearch)) ||
                           (s.nisn && s.nisn.includes(studentSearch)) ||
+                          (s.attendanceNumber && s.attendanceNumber.includes(studentSearch)) ||
+                          (s.noAbsen && s.noAbsen.includes(studentSearch)) ||
                           s.email.toLowerCase().includes(studentSearch.toLowerCase());
       return matchClass && matchSearch;
     });
@@ -224,6 +313,102 @@ export const AdminDashboard: React.FC = () => {
       return linkedChildren.some(c => c.className === parentSelectedClass);
     });
   }, [parents, parentSearch, parentSelectedClass, students]);
+
+  // Reset student page and selections when filters change
+  React.useEffect(() => {
+    setStudentPage(1);
+    setSelectedStudentIds([]);
+  }, [selectedClass, studentSearch, studentPageSize]);
+
+  // Reset parent page and selections when filters change
+  React.useEffect(() => {
+    setParentPage(1);
+    setSelectedParentIds([]);
+  }, [parentSelectedClass, parentSearch, parentPageSize]);
+
+  // Paginated Students
+  const totalStudentPages = Math.ceil(filteredStudents.length / studentPageSize) || 1;
+  const paginatedStudents = useMemo(() => {
+    const startIndex = (studentPage - 1) * studentPageSize;
+    return filteredStudents.slice(startIndex, startIndex + studentPageSize);
+  }, [filteredStudents, studentPage, studentPageSize]);
+
+  // Paginated Parents
+  const totalParentPages = Math.ceil(filteredParents.length / parentPageSize) || 1;
+  const paginatedParents = useMemo(() => {
+    const startIndex = (parentPage - 1) * parentPageSize;
+    return filteredParents.slice(startIndex, startIndex + parentPageSize);
+  }, [filteredParents, parentPage, parentPageSize]);
+
+  // Student Bulk Selection Helpers
+  const isAllStudentsSelectedOnPage = paginatedStudents.length > 0 && paginatedStudents.every(s => selectedStudentIds.includes(s.id));
+
+  const handleSelectAllStudentsOnPage = (checked: boolean) => {
+    if (checked) {
+      const pageIds = paginatedStudents.map(s => s.id);
+      setSelectedStudentIds(prev => Array.from(new Set([...prev, ...pageIds])));
+    } else {
+      const pageIdSet = new Set(paginatedStudents.map(s => s.id));
+      setSelectedStudentIds(prev => prev.filter(id => !pageIdSet.has(id)));
+    }
+  };
+
+  const handleToggleSelectStudent = (id: string) => {
+    setSelectedStudentIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  // Parent Bulk Selection Helpers
+  const isAllParentsSelectedOnPage = paginatedParents.length > 0 && paginatedParents.every(p => selectedParentIds.includes(p.id));
+
+  const handleSelectAllParentsOnPage = (checked: boolean) => {
+    if (checked) {
+      const pageIds = paginatedParents.map(p => p.id);
+      setSelectedParentIds(prev => Array.from(new Set([...prev, ...pageIds])));
+    } else {
+      const pageIdSet = new Set(paginatedParents.map(p => p.id));
+      setSelectedParentIds(prev => prev.filter(id => !pageIdSet.has(id)));
+    }
+  };
+
+  const handleToggleSelectParent = (id: string) => {
+    setSelectedParentIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  // Bulk Delete Trigger
+  const handleTriggerBulkDelete = (role: 'siswa' | 'orangtua') => {
+    const ids = role === 'siswa' ? selectedStudentIds : selectedParentIds;
+    if (ids.length === 0) return;
+    setBulkDeleteModal({
+      open: true,
+      role,
+      ids,
+      count: ids.length,
+      title: role === 'siswa' ? `Hapus Kolektif ${ids.length} Siswa` : `Hapus Kolektif ${ids.length} Orang Tua`
+    });
+  };
+
+  // Bulk Delete Execution
+  const handleConfirmBulkDelete = async () => {
+    if (!bulkDeleteModal.ids || bulkDeleteModal.ids.length === 0) return;
+    setDeletingBulk(true);
+    try {
+      await deleteUsersBulk(bulkDeleteModal.ids);
+      if (bulkDeleteModal.role === 'siswa') {
+        setSelectedStudentIds([]);
+      } else if (bulkDeleteModal.role === 'orangtua') {
+        setSelectedParentIds([]);
+      }
+      setBulkDeleteModal({ open: false, role: 'siswa', ids: [], count: 0, title: '' });
+    } catch (err) {
+      console.error('Error deleting bulk users:', err);
+    } finally {
+      setDeletingBulk(false);
+    }
+  };
 
   // Filtered Teachers
   const filteredTeachers = useMemo(() => {
@@ -248,6 +433,7 @@ export const AdminDashboard: React.FC = () => {
       name: '',
       email: '',
       nisn: '',
+      noAbsen: '',
       gender: 'L',
       className: '7A',
       phone: '08123456789',
@@ -269,7 +455,8 @@ export const AdminDashboard: React.FC = () => {
     setFormData({
       name: user.name,
       email: user.email,
-      nisn: user.nisn || '',
+      nisn: user.nis || user.nisn || '',
+      noAbsen: user.attendanceNumber || user.noAbsen || '',
       gender: user.gender || 'L',
       className: cleanClassName,
       phone: user.phone || '',
@@ -293,7 +480,10 @@ export const AdminDashboard: React.FC = () => {
         name: formData.name.trim(),
         email: formData.email.trim(),
         phone: formData.phone.trim(),
+        nis: formData.nisn ? formData.nisn.trim() : undefined,
         nisn: formData.nisn ? formData.nisn.trim() : undefined,
+        attendanceNumber: formData.noAbsen ? formData.noAbsen.trim() : undefined,
+        noAbsen: formData.noAbsen ? formData.noAbsen.trim() : undefined,
         className: formData.className,
         gender: formData.gender,
       };
@@ -330,6 +520,7 @@ export const AdminDashboard: React.FC = () => {
 
     if (addRole === 'siswa') {
       const cleanNisn = formData.nisn?.trim();
+      const cleanAbsen = formData.noAbsen?.trim();
       const customUsername = formData.email?.trim();
       const studentIdentifier = customUsername 
         ? customUsername 
@@ -347,7 +538,7 @@ export const AdminDashboard: React.FC = () => {
         role: 'orangtua',
         phone: formData.parentPhone || '08139876543',
         password: parentPassword,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(pName)}`
+        avatar: DATA_URI_ORANG_TUA
       });
 
       newUser = await addUser({
@@ -355,14 +546,15 @@ export const AdminDashboard: React.FC = () => {
         email: studentIdentifier,
         role: 'siswa',
         gender: formData.gender || 'L',
+        nis: cleanNisn,
         nisn: cleanNisn,
+        attendanceNumber: cleanAbsen || undefined,
+        noAbsen: cleanAbsen || undefined,
         className: formData.className,
         phone: formData.phone || '08123456789',
         parentId: parentUser.id,
         password: studentPassword,
-        avatar: formData.gender === 'P'
-          ? `https://api.dicebear.com/7.x/avataaars/svg?seed=female-${encodeURIComponent(formData.name.trim())}`
-          : `https://api.dicebear.com/7.x/avataaars/svg?seed=male-${encodeURIComponent(formData.name.trim())}`
+        avatar: formData.gender === 'P' ? DATA_URI_SISWA_PUTRI : DATA_URI_SISWA_PUTRA
       });
 
       await updateUser(parentUser.id, { studentIds: [newUser.id] });
@@ -451,44 +643,19 @@ export const AdminDashboard: React.FC = () => {
     try {
       const lines = importText.trim().split('\n');
       const parsed = lines.map(line => {
-        const parts = line.split(',').map(s => s.trim());
-        const nisn = parts[0] || '';
-        const name = parts[1] || '';
-        
-        let gender: 'L' | 'P' = 'L';
-        let className = '7A';
-        let parentName: string | undefined = undefined;
-        let parentPhone: string | undefined = undefined;
-
-        if (parts.length >= 6) {
-          const gStr = (parts[2] || '').toUpperCase();
-          gender = gStr.startsWith('P') || gStr === 'WANITA' || gStr === 'PEREMPUAN' ? 'P' : 'L';
-          className = parts[3]?.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-          parentName = parts[4] || undefined;
-          parentPhone = parts[5] || undefined;
-        } else {
-          const part2 = parts[2] || '';
-          if (part2.toUpperCase() === 'L' || part2.toUpperCase() === 'P') {
-            gender = part2.toUpperCase() === 'P' ? 'P' : 'L';
-            className = parts[3]?.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-            parentName = parts[4] || undefined;
-            parentPhone = parts[5] || undefined;
-          } else {
-            className = part2?.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-            parentName = parts[3] || undefined;
-            parentPhone = parts[4] || undefined;
-          }
-        }
-
+        const item = parseImportLine(line);
         return {
-          nisn,
-          name,
-          gender,
-          className,
-          parentName,
-          parentPhone
+          nis: item.nis,
+          nisn: item.nisn,
+          noAbsen: item.noAbsen,
+          attendanceNumber: item.attendanceNumber,
+          name: item.name,
+          gender: item.gender,
+          className: item.className,
+          parentName: item.parentName || undefined,
+          parentPhone: item.parentPhone || undefined
         };
-      }).filter(item => item.name && item.nisn);
+      }).filter(item => item.name && item.nis);
 
       const count = await importStudentsBulk(parsed);
       setImportSuccessCount(count);
@@ -499,15 +666,15 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  // Download Sample Template CSV (6 Columns with Gender)
+  // Download Sample Template CSV (7 Columns with No Absen and Gender)
   const handleDownloadTemplate = () => {
     const csvContent = "data:text/csv;charset=utf-8," + 
-      "NISN,Nama Siswa,Jenis Kelamin (L/P),Kelas,Nama Orang Tua,No HP Orang Tua\n" +
-      "0089234521, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801\n" +
-      "0089234522, Annisa Rahma, P, 7A, Ibu Rahma, 081234567802\n" +
-      "0089234523, Bayu Kurniawan, L, 7B, Bpk. Kurniawan, 081234567803\n" +
-      "0089234524, Cinta Laura S., P, 7C, Ibu Laura, 081234567804\n" +
-      "0089234525, Doni Pratama, L, 8A, Bpk. Pratama, 081234567805";
+      "NIS,No Absen,Nama Siswa,Jenis Kelamin (L/P),Kelas,Nama Orang Tua,No HP Orang Tua\n" +
+      "23451, 01, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801\n" +
+      "23452, 02, Annisa Rahma, P, 7A, Ibu Rahma, 081234567802\n" +
+      "23453, 03, Bayu Kurniawan, L, 7B, Bpk. Kurniawan, 081234567803\n" +
+      "23454, 04, Cinta Laura S., P, 7C, Ibu Laura, 081234567804\n" +
+      "23455, 05, Doni Pratama, L, 8A, Bpk. Pratama, 081234567805";
     
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -518,24 +685,25 @@ export const AdminDashboard: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  // Download Sample Template Excel (.xlsx) (6 Columns with Gender)
+  // Download Sample Template Excel (.xlsx) (7 Columns with No Absen and Gender)
   const handleDownloadExcelTemplate = () => {
     const wsData = [
-      ['NISN', 'Nama Siswa', 'Jenis Kelamin (L/P)', 'Kelas', 'Nama Orang Tua', 'No HP Orang Tua'],
-      ['0089234521', 'Ahmad Fauzan', 'L', '7A', 'Bpk. Fauzan', '081234567801'],
-      ['0089234522', 'Annisa Rahma', 'P', '7A', 'Ibu Rahma', '081234567802'],
-      ['0089234523', 'Bayu Kurniawan', 'L', '7B', 'Bpk. Kurniawan', '081234567803'],
-      ['0089234524', 'Cinta Laura S.', 'P', '7C', 'Ibu Laura', '081234567804'],
-      ['0089234525', 'Doni Pratama', 'L', '8A', 'Bpk. Pratama', '081234567805'],
-      ['0089234526', 'Eka Putri Lestari', 'P', '8B', 'Ibu Lestari', '081234567806'],
-      ['0089234527', 'Farhan Ramadhan', 'L', '9A', 'Bpk. Ramadhan', '081234567807']
+      ['NIS', 'No Absen', 'Nama Siswa', 'Jenis Kelamin (L/P)', 'Kelas', 'Nama Orang Tua', 'No HP Orang Tua'],
+      ['23451', '01', 'Ahmad Fauzan', 'L', '7A', 'Bpk. Fauzan', '081234567801'],
+      ['23452', '02', 'Annisa Rahma', 'P', '7A', 'Ibu Rahma', '081234567802'],
+      ['23453', '03', 'Bayu Kurniawan', 'L', '7B', 'Bpk. Kurniawan', '081234567803'],
+      ['23454', '04', 'Cinta Laura S.', 'P', '7C', 'Ibu Laura', '081234567804'],
+      ['23455', '05', 'Doni Pratama', 'L', '8A', 'Bpk. Pratama', '081234567805'],
+      ['23456', '06', 'Eka Putri Lestari', 'P', '8B', 'Ibu Lestari', '081234567806'],
+      ['23457', '07', 'Farhan Ramadhan', 'L', '9A', 'Bpk. Ramadhan', '081234567807']
     ];
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [
-      { wch: 16 },
+      { wch: 14 },
+      { wch: 12 },
       { wch: 28 },
       { wch: 20 },
-      { wch: 15 },
+      { wch: 12 },
       { wch: 26 },
       { wch: 18 }
     ];
@@ -562,47 +730,62 @@ export const AdminDashboard: React.FC = () => {
         const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
 
         const parsedLines: string[] = [];
-        for (const row of rawRows) {
-          if (!row || row.length === 0) continue;
-          const col0 = String(row[0] || '').trim();
-          const col1 = String(row[1] || '').trim();
+        let headerRowFound = false;
+        let colNisIdx = 0;
+        let colAbsenIdx = 1;
+        let colNameIdx = 2;
+        let colGenderIdx = 3;
+        let colClassIdx = 4;
+        let colParentIdx = 5;
+        let colPhoneIdx = 6;
 
-          // Skip header row if it contains 'NISN' or 'Nama'
-          if (col0.toLowerCase().includes('nisn') || col1.toLowerCase().includes('nama')) {
+        for (let r = 0; r < rawRows.length; r++) {
+          const row = rawRows[r];
+          if (!row || row.length === 0) continue;
+
+          const rowStr = row.map((c: any) => String(c || '').trim().toLowerCase()).join(' ');
+
+          // Check if this is the header row
+          if (!headerRowFound && (rowStr.includes('nis') || rowStr.includes('nama') || rowStr.includes('absen'))) {
+            headerRowFound = true;
+            row.forEach((col: any, idx: number) => {
+              const str = String(col || '').trim().toLowerCase();
+              if (str.includes('absen') || str.includes('presensi') || str.includes('no.')) colAbsenIdx = idx;
+              else if (str.includes('nis')) colNisIdx = idx;
+              else if (str.includes('nama') && !str.includes('orang') && !str.includes('ortu') && !str.includes('wali')) colNameIdx = idx;
+              else if (str.includes('kelamin') || str.includes('gender') || str.includes('l/p')) colGenderIdx = idx;
+              else if (str.includes('kelas') || str.includes('rombel')) colClassIdx = idx;
+              else if (str.includes('ortu') || str.includes('orang tua') || str.includes('wali')) colParentIdx = idx;
+              else if (str.includes('hp') || str.includes('telepon') || str.includes('wa') || str.includes('kontak')) colPhoneIdx = idx;
+            });
             continue;
           }
-          if (!col0 && !col1) continue;
 
-          const nisn = col0;
-          const name = col1;
-          
-          let gender = 'L';
-          let className = '7A';
-          let parentName = '';
-          let parentPhone = '';
+          const col0 = String(row[colNisIdx] !== undefined ? row[colNisIdx] : (row[0] || '')).trim();
+          const colName = String(row[colNameIdx] !== undefined ? row[colNameIdx] : (row[1] || '')).trim();
 
-          if (row.length >= 6) {
-            const rawG = String(row[2] || '').trim().toUpperCase();
-            gender = rawG.startsWith('P') || rawG === 'WANITA' || rawG === 'PEREMPUAN' ? 'P' : 'L';
-            const rawClass = String(row[3] || '7A').trim();
-            className = rawClass.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-            parentName = String(row[4] || '').trim();
-            parentPhone = String(row[5] || '').trim();
-          } else {
-            const rawCol2 = String(row[2] || '').trim();
-            if (rawCol2.toUpperCase() === 'L' || rawCol2.toUpperCase() === 'P') {
-              gender = rawCol2.toUpperCase() === 'P' ? 'P' : 'L';
-              const rawClass = String(row[3] || '7A').trim();
-              className = rawClass.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-              parentName = String(row[4] || '').trim();
-            } else {
-              className = rawCol2.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2') || '7A';
-              parentName = String(row[3] || '').trim();
-              parentPhone = String(row[4] || '').trim();
+          if (!col0 && !colName) continue;
+
+          // If standard column structure wasn't detected by header, parse row elements directly
+          if (!headerRowFound) {
+            const joinedRow = row.map((val: any) => String(val || '').trim()).join(', ');
+            const parsedItem = parseImportLine(joinedRow);
+            if (parsedItem.nis && parsedItem.name) {
+              parsedLines.push(`${parsedItem.nis}, ${parsedItem.noAbsen || ''}, ${parsedItem.name}, ${parsedItem.gender}, ${parsedItem.className}, ${parsedItem.parentName}, ${parsedItem.parentPhone}`);
             }
-          }
+          } else {
+            const nis = col0;
+            const noAbsen = row[colAbsenIdx] !== undefined ? String(row[colAbsenIdx]).trim() : '';
+            const name = colName;
+            const rawG = row[colGenderIdx] !== undefined ? String(row[colGenderIdx]).trim().toUpperCase() : 'L';
+            const gender = rawG.startsWith('P') || rawG === 'WANITA' || rawG === 'PEREMPUAN' ? 'P' : 'L';
+            const rawClass = row[colClassIdx] !== undefined ? String(row[colClassIdx]).trim() : '7A';
+            const className = normalizeClassName(rawClass);
+            const parentName = row[colParentIdx] !== undefined ? String(row[colParentIdx]).trim() : '';
+            const parentPhone = row[colPhoneIdx] !== undefined ? String(row[colPhoneIdx]).trim() : '';
 
-          parsedLines.push(`${nisn}, ${name}, ${gender}, ${className}, ${parentName}, ${parentPhone}`);
+            parsedLines.push(`${nis}, ${noAbsen}, ${name}, ${gender}, ${className}, ${parentName}, ${parentPhone}`);
+          }
         }
 
         if (parsedLines.length > 0) {
@@ -621,11 +804,11 @@ export const AdminDashboard: React.FC = () => {
 
   const handleLoadSampleImport = () => {
     setImportText(
-`0089234521, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801
-0089234522, Annisa Rahma, P, 7A, Ibu Rahma, 081234567802
-0089234523, Bayu Kurniawan, L, 7B, Bpk. Kurniawan, 081234567803
-0089234524, Cinta Laura S., P, 7C, Ibu Laura, 081234567804
-0089234525, Doni Pratama, L, 8A, Bpk. Pratama, 081234567805`
+`23451, 01, Ahmad Fauzan, L, 7A, Bpk. Fauzan, 081234567801
+23452, 02, Annisa Rahma, P, 7A, Ibu Rahma, 081234567802
+23453, 03, Bayu Kurniawan, L, 7B, Bpk. Kurniawan, 081234567803
+23454, 04, Cinta Laura S., P, 7C, Ibu Laura, 081234567804
+23455, 05, Doni Pratama, L, 8A, Bpk. Pratama, 081234567805`
     );
     setImportSuccessCount(null);
   };
@@ -824,6 +1007,25 @@ export const AdminDashboard: React.FC = () => {
             </button>
 
             <button
+              onClick={() => { setActiveMenu('journals'); setMobileSidebarOpen(false); }}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                activeMenu === 'journals'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <BookOpen className="w-4 h-4 text-purple-400" />
+                <span>Monitoring Jurnal</span>
+              </div>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
+                activeMenu === 'journals' ? 'bg-purple-700 text-white' : 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300'
+              }`}>
+                {journals.length}
+              </span>
+            </button>
+
+            <button
               onClick={() => { setActiveMenu('reports'); setMobileSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                 activeMenu === 'reports'
@@ -958,8 +1160,8 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
 
-              {/* 4 Stats Cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5 pt-4 border-t border-white/10">
+              {/* 5 Stats Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-5 pt-4 border-t border-white/10">
                 <div 
                   onClick={() => setActiveMenu('students')} 
                   className="bg-blue-950/40 hover:bg-blue-950/60 cursor-pointer backdrop-blur-md rounded-xl p-3 border border-blue-500/30 transition-all"
@@ -997,6 +1199,18 @@ export const AdminDashboard: React.FC = () => {
                 </div>
 
                 <div 
+                  onClick={() => setActiveMenu('journals')} 
+                  className="bg-indigo-950/40 hover:bg-indigo-950/60 cursor-pointer backdrop-blur-md rounded-xl p-3 border border-indigo-500/30 transition-all"
+                >
+                  <span className="text-[10px] text-indigo-200 font-semibold flex items-center justify-between">
+                    <span>Jurnal Terkumpul</span>
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                  </span>
+                  <p className="text-lg sm:text-xl font-bold text-indigo-300 mt-1">{journals.length} Entri</p>
+                  <p className="text-[9px] text-indigo-200/80">Pantau & Ekspor Excel</p>
+                </div>
+
+                <div 
                   onClick={() => setActiveMenu('credentials')} 
                   className="bg-purple-950/40 hover:bg-purple-950/60 cursor-pointer backdrop-blur-md rounded-xl p-3 border border-purple-500/30 transition-all"
                 >
@@ -1018,11 +1232,12 @@ export const AdminDashboard: React.FC = () => {
                   <span>Sebaran Siswa Per Kelas</span>
                 </div>
                 <div className="space-y-1.5 text-xs max-h-48 overflow-y-auto pr-1">
-                  {AVAILABLE_CLASSES.map(cls => {
+                  {availableClasses.map(cls => {
                     const count = students.filter(s => s.className === cls).length;
+                    if (count === 0 && !['7A', '7B', '8A', '9A'].includes(cls)) return null;
                     return (
                       <div key={cls} className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
-                        <span className="text-slate-700 dark:text-slate-300 font-medium">{cls}</span>
+                        <span className="text-slate-700 dark:text-slate-300 font-medium">Kelas {cls}</span>
                         <span className="font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded text-[11px]">
                           {count} Siswa
                         </span>
@@ -1040,7 +1255,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   {teachers.map(t => (
                     <div key={t.id} className="p-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 flex items-center gap-2.5">
-                      <img src={t.avatar} alt={t.name} className="w-8 h-8 rounded-lg object-cover" />
+                      <UserAvatar user={t} size="sm" className="w-8 h-8 rounded-lg" />
                       <div className="min-w-0 flex-1">
                         <p className="font-bold text-slate-900 dark:text-white truncate">{t.name}</p>
                         <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">{t.className}</p>
@@ -1123,11 +1338,11 @@ export const AdminDashboard: React.FC = () => {
                   className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer shadow-xs"
                 >
                   <option value="all">Semua Kelas ({students.length} Siswa)</option>
-                  {AVAILABLE_CLASSES.map(cls => {
+                  {availableClasses.map(cls => {
                     const count = students.filter(s => s.className === cls).length;
                     return (
                       <option key={cls} value={cls}>
-                        {cls} ({count} Siswa)
+                        Kelas {cls} ({count} Siswa)
                       </option>
                     );
                   })}
@@ -1147,12 +1362,52 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Bulk Selection Action Toolbar */}
+            {selectedStudentIds.length > 0 && (
+              <div className="p-3 rounded-xl bg-purple-50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800 flex flex-wrap items-center justify-between gap-2.5 text-xs animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-600 text-white font-black text-[11px] flex items-center justify-center">
+                    {selectedStudentIds.length}
+                  </span>
+                  <span className="font-bold text-purple-900 dark:text-purple-200">
+                    Siswa Terpilih untuk Tindakan Kolektif
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTriggerBulkDelete('siswa')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Hapus Kolektif ({selectedStudentIds.length} Siswa)</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedStudentIds([])}
+                    className="px-2.5 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-semibold text-xs transition-colors"
+                  >
+                    Batal Pilih
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Student Table */}
             <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase text-[9px] font-bold">
                   <tr>
-                    <th className="p-3">Siswa & NISN</th>
+                    <th className="p-3 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={isAllStudentsSelectedOnPage}
+                        onChange={(e) => handleSelectAllStudentsOnPage(e.target.checked)}
+                        className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        title="Pilih Semua di Halaman Ini"
+                      />
+                    </th>
+                    <th className="p-3">Siswa & NIS</th>
+                    <th className="p-3 text-center">No. Absen</th>
                     <th className="p-3 text-center">L/P</th>
                     <th className="p-3">Kelas</th>
                     <th className="p-3">Username / Email Login</th>
@@ -1162,29 +1417,53 @@ export const AdminDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredStudents.length === 0 ? (
+                  {paginatedStudents.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="p-6 text-center text-slate-400 text-xs">
+                      <td colSpan={9} className="p-6 text-center text-slate-400 text-xs">
                         Tidak ada data siswa yang cocok dengan filter.
                       </td>
                     </tr>
                   ) : (
-                    filteredStudents.map((s) => {
+                    paginatedStudents.map((s) => {
                       const linkedParent = parents.find(p => p.id === s.parentId || (p.studentIds && p.studentIds.includes(s.id)));
                       const isPwdVisible = showPasswordsMap[s.id];
+                      const isSelected = selectedStudentIds.includes(s.id);
+                      const displayAbsen = s.attendanceNumber || s.noAbsen;
 
                       return (
-                        <tr key={s.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors">
+                        <tr 
+                          key={s.id} 
+                          className={`hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors ${
+                            isSelected ? 'bg-purple-50/40 dark:bg-purple-950/20' : ''
+                          }`}
+                        >
+                          <td className="p-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectStudent(s.id)}
+                              className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            />
+                          </td>
                           <td className="p-3">
                             <div className="flex items-center gap-2.5">
-                              <img src={s.avatar} alt={s.name} className="w-8 h-8 rounded-lg object-cover" />
+                              <UserAvatar user={s} gender={s.gender} size="sm" className="w-8 h-8 rounded-lg" />
                               <div>
                                 <p className="font-bold text-slate-900 dark:text-white">{s.name}</p>
                                 <p className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold font-mono">
-                                  NISN: {s.nisn || '-'}
+                                  NIS: {s.nis || s.nisn || '-'}
                                 </p>
                               </div>
                             </div>
+                          </td>
+                          <td className="p-3 text-center">
+                            {displayAbsen ? (
+                              <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-bold font-mono bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                {displayAbsen}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-[10px] italic">-</span>
+                            )}
                           </td>
                           <td className="p-3 text-center">
                             <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold ${
@@ -1275,6 +1554,76 @@ export const AdminDashboard: React.FC = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls Footer for Students */}
+            <div className="p-3 sm:p-4 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
+                <span>
+                  Menampilkan <strong>{filteredStudents.length > 0 ? (studentPage - 1) * studentPageSize + 1 : 0}</strong> - <strong>{Math.min(studentPage * studentPageSize, filteredStudents.length)}</strong> dari <strong>{filteredStudents.length}</strong> siswa
+                </span>
+
+                <div className="flex items-center gap-1.5">
+                  <span>Per hal:</span>
+                  <select
+                    value={studentPageSize}
+                    onChange={(e) => setStudentPageSize(Number(e.target.value))}
+                    className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-slate-200 outline-none"
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setStudentPage(p => Math.max(1, p - 1))}
+                  disabled={studentPage === 1}
+                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold transition-all"
+                  title="Halaman Sebelumnya"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                {Array.from({ length: Math.min(5, totalStudentPages) }, (_, i) => {
+                  let pageNum: number;
+                  if (totalStudentPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (studentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (studentPage >= totalStudentPages - 2) {
+                    pageNum = totalStudentPages - 4 + i;
+                  } else {
+                    pageNum = studentPage - 2 + i;
+                  }
+
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setStudentPage(pageNum)}
+                      className={`w-7 h-7 rounded-lg text-xs font-bold transition-all ${
+                        studentPage === pageNum
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+
+                <button
+                  onClick={() => setStudentPage(p => Math.min(totalStudentPages, p + 1))}
+                  disabled={studentPage >= totalStudentPages}
+                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold transition-all"
+                  title="Halaman Selanjutnya"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1301,7 +1650,7 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </div>
 
-            {/* Filter Kelas & Pencarian Orang Tua */}
+            {/* Search */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
               {/* Dropdown Filter Kelas Orang Tua */}
               <div className="flex items-center gap-2 shrink-0">
@@ -1315,14 +1664,14 @@ export const AdminDashboard: React.FC = () => {
                   className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-rose-500 cursor-pointer shadow-xs"
                 >
                   <option value="all">Semua Kelas ({parents.length} Orang Tua)</option>
-                  {AVAILABLE_CLASSES.map(cls => {
+                  {availableClasses.map(cls => {
                     const count = parents.filter(p => {
                       const linkedChildren = students.filter(s => s.parentId === p.id || (p.studentIds && p.studentIds.includes(s.id)));
                       return linkedChildren.some(c => c.className === cls);
                     }).length;
                     return (
                       <option key={cls} value={cls}>
-                        {cls} ({count} Orang Tua)
+                        Kelas {cls} ({count} Orang Tua)
                       </option>
                     );
                   })}
@@ -1342,11 +1691,50 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Bulk Selection Action Toolbar for Parents */}
+            {selectedParentIds.length > 0 && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 flex flex-wrap items-center justify-between gap-2.5 text-xs animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-rose-600 text-white font-black text-[11px] flex items-center justify-center">
+                    {selectedParentIds.length}
+                  </span>
+                  <span className="font-bold text-rose-900 dark:text-rose-200">
+                    Akun Orang Tua Terpilih untuk Tindakan Kolektif
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTriggerBulkDelete('orangtua')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Hapus Kolektif ({selectedParentIds.length} Orang Tua)</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedParentIds([])}
+                    className="px-2.5 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-semibold text-xs transition-colors"
+                  >
+                    Batal Pilih
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Parent Table */}
             <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase text-[9px] font-bold">
                   <tr>
+                    <th className="p-3 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={isAllParentsSelectedOnPage}
+                        onChange={(e) => handleSelectAllParentsOnPage(e.target.checked)}
+                        className="rounded text-rose-600 focus:ring-rose-500 cursor-pointer"
+                        title="Pilih Semua di Halaman Ini"
+                      />
+                    </th>
                     <th className="p-3">Nama Orang Tua</th>
                     <th className="p-3">No. WhatsApp / HP</th>
                     <th className="p-3">Username / Email</th>
@@ -1356,22 +1744,36 @@ export const AdminDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredParents.length === 0 ? (
+                  {paginatedParents.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="p-6 text-center text-slate-400 text-xs">
+                      <td colSpan={7} className="p-6 text-center text-slate-400 text-xs">
                         Tidak ada data orang tua yang ditemukan.
                       </td>
                     </tr>
                   ) : (
-                    filteredParents.map((p) => {
+                    paginatedParents.map((p) => {
                       const linkedChildren = students.filter(s => s.parentId === p.id || (p.studentIds && p.studentIds.includes(s.id)));
                       const isPwdVisible = showPasswordsMap[p.id];
+                      const isSelected = selectedParentIds.includes(p.id);
 
                       return (
-                        <tr key={p.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors">
+                        <tr 
+                          key={p.id} 
+                          className={`hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors ${
+                            isSelected ? 'bg-rose-50/40 dark:bg-rose-950/20' : ''
+                          }`}
+                        >
+                          <td className="p-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleSelectParent(p.id)}
+                              className="rounded text-rose-600 focus:ring-rose-500 cursor-pointer"
+                            />
+                          </td>
                           <td className="p-3">
                             <div className="flex items-center gap-2.5">
-                              <img src={p.avatar} alt={p.name} className="w-8 h-8 rounded-lg object-cover" />
+                              <UserAvatar user={p} size="sm" className="w-8 h-8 rounded-lg" />
                               <div>
                                 <p className="font-bold text-slate-900 dark:text-white">{p.name}</p>
                                 <p className="text-[10px] text-slate-400 font-mono">ID: {p.id}</p>
@@ -1443,6 +1845,76 @@ export const AdminDashboard: React.FC = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls Footer for Parents */}
+            <div className="p-3 sm:p-4 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
+                <span>
+                  Menampilkan <strong>{filteredParents.length > 0 ? (parentPage - 1) * parentPageSize + 1 : 0}</strong> - <strong>{Math.min(parentPage * parentPageSize, filteredParents.length)}</strong> dari <strong>{filteredParents.length}</strong> orang tua
+                </span>
+
+                <div className="flex items-center gap-1.5">
+                  <span>Per hal:</span>
+                  <select
+                    value={parentPageSize}
+                    onChange={(e) => setParentPageSize(Number(e.target.value))}
+                    className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-slate-200 outline-none"
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setParentPage(p => Math.max(1, p - 1))}
+                  disabled={parentPage === 1}
+                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold transition-all"
+                  title="Halaman Sebelumnya"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                {Array.from({ length: Math.min(5, totalParentPages) }, (_, i) => {
+                  let pageNum: number;
+                  if (totalParentPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (parentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (parentPage >= totalParentPages - 2) {
+                    pageNum = totalParentPages - 4 + i;
+                  } else {
+                    pageNum = parentPage - 2 + i;
+                  }
+
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setParentPage(pageNum)}
+                      className={`w-7 h-7 rounded-lg text-xs font-bold transition-all ${
+                        parentPage === pageNum
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+
+                <button
+                  onClick={() => setParentPage(p => Math.min(totalParentPages, p + 1))}
+                  disabled={parentPage >= totalParentPages}
+                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold transition-all"
+                  title="Halaman Selanjutnya"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1477,7 +1949,7 @@ export const AdminDashboard: React.FC = () => {
                   <div key={t.id} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-3">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <img src={t.avatar} alt={t.name} className="w-11 h-11 rounded-xl object-cover" />
+                        <UserAvatar user={t} size="md" className="w-11 h-11 rounded-xl" />
                         <div>
                           <h4 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm">{t.name}</h4>
                           <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 mt-0.5">
@@ -1540,6 +2012,11 @@ export const AdminDashboard: React.FC = () => {
               })}
             </div>
           </div>
+        )}
+
+        {/* ================= 4.5 MONITORING JURNAL SISWA ================= */}
+        {activeMenu === 'journals' && (
+          <AdminJournalMonitoring />
         )}
 
         {/* ================= 5. CETAK LAPORAN 7 KAIH ================= */}
@@ -1633,19 +2110,19 @@ export const AdminDashboard: React.FC = () => {
             <div className="p-3.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-900/50 space-y-2">
               <div className="flex items-center gap-1.5 text-purple-800 dark:text-purple-300 text-xs font-bold">
                 <FileSpreadsheet className="w-4 h-4" />
-                <span>Format Standar Baris Data Impor:</span>
+                <span>Format Standar Kolom Data Impor (7 Kolom):</span>
               </div>
               <p className="font-mono text-[11px] bg-white dark:bg-slate-900 p-2 rounded-lg border border-purple-200 dark:border-purple-800 text-purple-950 dark:text-purple-200 overflow-x-auto">
-                NISN, Nama Siswa, Kelas, Nama Orang Tua, No HP Orang Tua
+                NIS, No Absen, Nama Siswa, Jenis Kelamin (L/P), Kelas, Nama Orang Tua, No HP Orang Tua
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-600 dark:text-slate-400 pt-1">
                 <div className="flex items-start gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-purple-600 mt-1.5 shrink-0" />
-                  <p><strong>Akun Siswa:</strong> Username <code>[NISN]@sekolah.id</code> / NISN | Password <code>siswa[NISN]</code></p>
+                  <p><strong>Akun Siswa:</strong> Username <code>[NIS]@sekolah.id</code> / NIS | Password <code>siswa[NIS]</code></p>
                 </div>
                 <div className="flex items-start gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" />
-                  <p><strong>Akun Orang Tua:</strong> Username <code>ortu.[NISN]@sekolah.id</code> | Password <code>ortu[NISN]</code></p>
+                  <p><strong>Akun Orang Tua:</strong> Username <code>ortu.[NIS]@sekolah.id</code> | Password <code>ortu[NIS]</code></p>
                 </div>
               </div>
             </div>
@@ -1669,7 +2146,7 @@ export const AdminDashboard: React.FC = () => {
                 rows={5}
                 value={importText}
                 onChange={(e) => setImportText(e.target.value)}
-                placeholder="0089234516, Muhammad Faiz, L, 7A, Bpk. Bambang, 081234567810"
+                placeholder="23451, 01, Muhammad Faiz, L, 7A, Bpk. Bambang, 081234567810"
                 className="w-full p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 font-mono text-xs text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500 resize-none shadow-inner"
               />
 
@@ -1691,7 +2168,8 @@ export const AdminDashboard: React.FC = () => {
                       <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase text-[9px] font-bold sticky top-0">
                         <tr>
                           <th className="p-2.5">No</th>
-                          <th className="p-2.5">Siswa & NISN</th>
+                          <th className="p-2.5">Siswa & NIS</th>
+                          <th className="p-2.5 text-center">No. Absen</th>
                           <th className="p-2.5">Kelas</th>
                           <th className="p-2.5">Kredensial Siswa</th>
                           <th className="p-2.5">Orang Tua Terhubung</th>
@@ -1705,7 +2183,16 @@ export const AdminDashboard: React.FC = () => {
                             <td className="p-2.5 text-slate-400 font-mono">{row.idx}</td>
                             <td className="p-2.5 font-bold text-slate-900 dark:text-white">
                               {row.name || <span className="text-rose-500 italic">Nama kosong</span>}
-                              <span className="block text-[10px] text-indigo-600 font-mono">NISN: {row.nisn}</span>
+                              <span className="block text-[10px] text-indigo-600 font-mono">NIS: {row.nis}</span>
+                            </td>
+                            <td className="p-2.5 text-center">
+                              {row.noAbsen ? (
+                                <span className="inline-block px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  {row.noAbsen}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-[10px] italic">-</span>
+                              )}
                             </td>
                             <td className="p-2.5">
                               <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
@@ -1713,7 +2200,7 @@ export const AdminDashboard: React.FC = () => {
                               </span>
                             </td>
                             <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-300">
-                              <div>User: <strong className="text-indigo-600 dark:text-indigo-400">{row.nisn}</strong></div>
+                              <div>User: <strong className="text-indigo-600 dark:text-indigo-400">{row.nis}</strong></div>
                               <div>Pass: <strong>{row.studentPassword}</strong></div>
                             </td>
                             <td className="p-2.5">
@@ -1729,7 +2216,7 @@ export const AdminDashboard: React.FC = () => {
                             <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-300">
                               {row.parentName ? (
                                 <div>
-                                  <div>User: <strong className="text-rose-600 dark:text-rose-400">ortu.{row.nisn}</strong></div>
+                                  <div>User: <strong className="text-rose-600 dark:text-rose-400">ortu.{row.nis}</strong></div>
                                   <div>Pass: <strong>{row.parentPassword}</strong></div>
                                 </div>
                               ) : '-'}
@@ -1829,8 +2316,8 @@ export const AdminDashboard: React.FC = () => {
                     className="w-full p-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-semibold"
                   >
                     <option value="all">Semua Kelas</option>
-                    {AVAILABLE_CLASSES.map(cls => (
-                      <option key={cls} value={cls}>{cls}</option>
+                    {availableClasses.map(cls => (
+                      <option key={cls} value={cls}>Kelas {cls}</option>
                     ))}
                   </select>
                 </div>
@@ -2190,19 +2677,29 @@ export const AdminDashboard: React.FC = () => {
               {/* Siswa Fields */}
               {addRole === 'siswa' && (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                     <div>
-                      <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">NISN (10 Digit) *</label>
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">NIS *</label>
                       <input
                         type="text"
-                        placeholder="0089234512"
+                        placeholder="23451"
                         value={formData.nisn}
                         onChange={(e) => setFormData({ ...formData, nisn: e.target.value })}
-                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500 font-mono"
                       />
                     </div>
                     <div>
-                      <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Jenis Kelamin *</label>
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">No. Absen</label>
+                      <input
+                        type="text"
+                        placeholder="01"
+                        value={formData.noAbsen}
+                        onChange={(e) => setFormData({ ...formData, noAbsen: e.target.value })}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">L / P *</label>
                       <select
                         value={formData.gender || 'L'}
                         onChange={(e) => setFormData({ ...formData, gender: e.target.value as 'L' | 'P' })}
@@ -2219,8 +2716,8 @@ export const AdminDashboard: React.FC = () => {
                         onChange={(e) => setFormData({ ...formData, className: e.target.value })}
                         className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500"
                       >
-                        {AVAILABLE_CLASSES.map(cls => (
-                          <option key={cls} value={cls}>{cls}</option>
+                        {availableClasses.map(cls => (
+                          <option key={cls} value={cls}>Kelas {cls}</option>
                         ))}
                       </select>
                     </div>
@@ -2268,8 +2765,8 @@ export const AdminDashboard: React.FC = () => {
                     onChange={(e) => setFormData({ ...formData, assignedClass: e.target.value })}
                     className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-purple-500"
                   >
-                    {AVAILABLE_CLASSES.map(cls => (
-                      <option key={cls} value={cls}>{cls}</option>
+                    {availableClasses.map(cls => (
+                      <option key={cls} value={cls}>Kelas {cls}</option>
                     ))}
                   </select>
                 </div>
@@ -2514,6 +3011,70 @@ export const AdminDashboard: React.FC = () => {
                   <>
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>Ya, Hapus</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== MODAL KONFIRMASI HAPUS KOLEKTIF ===================== */}
+      {bulkDeleteModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-[#1E293B] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 dark:bg-rose-950 flex items-center justify-center text-rose-600 mx-auto shadow-xs">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-black text-slate-900 dark:text-white">
+                {bulkDeleteModal.title}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Apakah Anda yakin ingin menghapus sebanyak <strong>{bulkDeleteModal.count} {bulkDeleteModal.role === 'siswa' ? 'siswa' : 'orang tua'}</strong> secara massal?
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-rose-50/80 dark:bg-rose-950/40 rounded-xl border border-rose-200 dark:border-rose-900/60 text-left text-xs space-y-2">
+              <div className="flex justify-between font-bold text-rose-900 dark:text-rose-200">
+                <span>Jumlah Akun Dihapus:</span>
+                <span className="font-mono text-sm">{bulkDeleteModal.count} Akun</span>
+              </div>
+              <p className="text-[11px] text-rose-700 dark:text-rose-300 leading-relaxed">
+                {bulkDeleteModal.role === 'siswa' 
+                  ? 'Semua data siswa yang dipilih akan dihapus permanen, dan relasi orang tua terkait akan diperbarui secara aman.'
+                  : 'Semua data akun orang tua yang dipilih akan dihapus permanen, dan relasi pada akun siswa akan diperbarui secara aman.'}
+              </p>
+              <div className="pt-2 border-t border-rose-200/60 dark:border-rose-800/60 text-[10px] text-slate-500 dark:text-slate-400">
+                Tindakan ini tidak dapat dibatalkan setelah diproses.
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                disabled={deletingBulk}
+                onClick={() => setBulkDeleteModal({ open: false, role: 'siswa', ids: [], count: 0, title: '' })}
+                className="py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300 transition-all cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deletingBulk}
+                onClick={handleConfirmBulkDelete}
+                className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {deletingBulk ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus {bulkDeleteModal.count}...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Kolektif</span>
                   </>
                 )}
               </button>

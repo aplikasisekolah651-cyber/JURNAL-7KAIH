@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, 
   Search, 
@@ -42,6 +42,7 @@ import { HabitIcon } from '../common/HabitIcon';
 import { E2EEBadge } from '../common/E2EEBadge';
 import { PDFReportGenerator } from '../../lib/pdfGenerator';
 import { audioNotifier } from '../../lib/audioNotifier';
+import { UserAvatar } from '../common/UserAvatar';
 
 export const TeacherDashboard: React.FC = () => {
   const { currentUser, allUsers } = useAuth();
@@ -53,7 +54,56 @@ export const TeacherDashboard: React.FC = () => {
     getStudentStats 
   } = useJournal();
 
-  const [selectedClassId, setSelectedClassId] = useState<string>('class-7a');
+  // Dynamic available classes from registered student database
+  const availableClasses = useMemo(() => {
+    const classMap = new Map<string, { id: string; name: string; rawName: string; studentCount: number }>();
+    
+    // Scan all student users
+    const students = allUsers.filter(u => u.role === 'siswa');
+    students.forEach(s => {
+      const cName = s.className ? s.className.trim() : '7A';
+      const cId = s.classId || `class-${cName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const displayName = cName.toLowerCase().startsWith('kelas') ? cName : `Kelas ${cName}`;
+      if (!classMap.has(cId)) {
+        classMap.set(cId, { id: cId, name: displayName, rawName: cName, studentCount: 0 });
+      }
+      classMap.get(cId)!.studentCount += 1;
+    });
+
+    // Fallback if no students yet
+    if (classMap.size === 0) {
+      ['7A', '7B', '8A', '9A'].forEach(cName => {
+        const cId = `class-${cName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        classMap.set(cId, { id: cId, name: `Kelas ${cName}`, rawName: cName, studentCount: 0 });
+      });
+    }
+
+    return Array.from(classMap.values()).sort((a, b) => 
+      a.rawName.localeCompare(b.rawName, undefined, { numeric: true, sensitivity: 'base' })
+    );
+  }, [allUsers]);
+
+  // Initial teacher class
+  const teacherInitialClassId = useMemo(() => {
+    if (currentUser.assignedClassIds && currentUser.assignedClassIds.length > 0) {
+      return currentUser.assignedClassIds[0];
+    }
+    if (currentUser.className) {
+      const clean = currentUser.className.replace(/\s*\(.*?\)\s*/g, '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const match = availableClasses.find(c => c.id === `class-${clean}` || c.rawName.toLowerCase() === clean);
+      if (match) return match.id;
+    }
+    return availableClasses[0]?.id || 'class-7a';
+  }, [currentUser, availableClasses]);
+
+  const [selectedClassId, setSelectedClassId] = useState<string>(() => teacherInitialClassId);
+
+  useEffect(() => {
+    if (teacherInitialClassId && (!selectedClassId || !availableClasses.some(c => c.id === selectedClassId))) {
+      setSelectedClassId(teacherInitialClassId);
+    }
+  }, [teacherInitialClassId, availableClasses, selectedClassId]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   
@@ -63,8 +113,14 @@ export const TeacherDashboard: React.FC = () => {
   const [awardedBadge, setAwardedBadge] = useState('Bintang 7 KAIH Teladan');
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
 
-  // Get students in this class
-  const classStudents = allUsers.filter(u => u.role === 'siswa' && (u.classId === selectedClassId || !u.classId));
+  const selectedClassObj = availableClasses.find(c => c.id === selectedClassId) || availableClasses[0];
+  const selectedClassName = selectedClassObj?.rawName || '7A';
+
+  // Get students in this class matching by classId or className
+  const classStudents = allUsers.filter(u => {
+    if (u.role !== 'siswa') return false;
+    return u.classId === selectedClassId || u.className === selectedClassName;
+  });
   const classStudentIds = classStudents.map(s => s.id);
 
   // Classroom Analysis Summary
@@ -98,7 +154,9 @@ export const TeacherDashboard: React.FC = () => {
   // Filter student rows
   const filteredRows = studentRows.filter(row => {
     const matchesSearch = row.student.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          (row.student.nisn && row.student.nisn.includes(searchQuery));
+                          (row.student.nis && row.student.nis.includes(searchQuery)) ||
+                          (row.student.nisn && row.student.nisn.includes(searchQuery)) ||
+                          (row.student.attendanceNumber && row.student.attendanceNumber.includes(searchQuery));
     const matchesCategory = filterCategory === 'all' || row.level === filterCategory;
     return matchesSearch && matchesCategory;
   });
@@ -187,15 +245,15 @@ export const TeacherDashboard: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <select
               value={selectedClassId}
               onChange={(e) => setSelectedClassId(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg bg-white/10 text-white text-xs font-semibold border border-white/20 outline-none backdrop-blur-md"
+              className="px-3 py-2 min-h-[38px] rounded-xl bg-white/10 text-white text-xs font-semibold border border-white/20 outline-none backdrop-blur-md cursor-pointer"
             >
-              {DEMO_CLASSES.map(c => (
+              {availableClasses.map(c => (
                 <option key={c.id} value={c.id} className="text-slate-900">
-                  {c.name} ({c.academicYear})
+                  {c.name} ({c.studentCount} Siswa)
                 </option>
               ))}
             </select>
@@ -203,9 +261,9 @@ export const TeacherDashboard: React.FC = () => {
             <button
               id="teacher-export-class-pdf-btn"
               onClick={handleExportClassPDF}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-xs transition-all active:scale-95"
+              className="inline-flex items-center justify-center gap-2 px-3.5 py-2 min-h-[38px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-xs transition-all active:scale-98"
             >
-              <Printer className="w-3.5 h-3.5" />
+              <Printer className="w-4 h-4" />
               <span>Cetak Laporan Bulanan (1-Klik PDF)</span>
             </button>
           </div>
@@ -343,7 +401,7 @@ export const TeacherDashboard: React.FC = () => {
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Cari siswa atau NISN..."
+                placeholder="Cari siswa, NIS, absen..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-8 pr-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-indigo-500 w-44 sm:w-52"
@@ -394,7 +452,8 @@ export const TeacherDashboard: React.FC = () => {
             <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-500 dark:text-slate-400 uppercase text-[9px] font-bold">
               <tr>
                 <th className="p-2.5 rounded-l-lg">No</th>
-                <th className="p-2.5">Nama Siswa & NISN</th>
+                <th className="p-2.5">Nama Siswa & NIS</th>
+                <th className="p-2.5 text-center">No Absen</th>
                 <th className="p-2.5 text-center">Jurnal Terisi</th>
                 <th className="p-2.5 text-center">Skor Kepatuhan</th>
                 <th className="p-2.5 text-center">Status Keterbiasaan</th>
@@ -410,21 +469,24 @@ export const TeacherDashboard: React.FC = () => {
                   </td>
                   <td className="p-2.5">
                     <div className="flex items-center gap-2">
-                      <img
-                        src={row.student.avatar}
-                        alt={row.student.name}
-                        referrerPolicy="no-referrer"
-                        className="w-7 h-7 rounded-lg object-cover"
+                      <UserAvatar
+                        user={row.student}
+                        gender={row.student.gender}
+                        size="sm"
+                        className="w-7 h-7 rounded-lg shrink-0"
                       />
                       <div>
                         <p className="font-semibold text-slate-900 dark:text-white">
                           {row.student.name}
                         </p>
                         <p className="text-[10px] text-slate-400">
-                          NISN: {row.student.nisn || '0089234512'} • {row.student.className}
+                          NIS: {row.student.nis || row.student.nisn || '-'} • {row.student.className || '7A'}
                         </p>
                       </div>
                     </div>
+                  </td>
+                  <td className="p-2.5 text-center font-mono font-bold text-indigo-600 dark:text-indigo-400 text-xs">
+                    {row.student.attendanceNumber || row.student.noAbsen || '-'}
                   </td>
                   <td className="p-2.5 text-center font-semibold text-slate-700 dark:text-slate-300">
                     {row.entriesCount} Hari
@@ -479,11 +541,11 @@ export const TeacherDashboard: React.FC = () => {
             {/* Header */}
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2.5">
-                <img
-                  src={inspectingStudent.avatar}
-                  alt={inspectingStudent.name}
-                  referrerPolicy="no-referrer"
-                  className="w-8 h-8 rounded-lg object-cover"
+                <UserAvatar
+                  user={inspectingStudent}
+                  gender={inspectingStudent.gender}
+                  size="sm"
+                  className="w-8 h-8 rounded-lg shrink-0"
                 />
                 <div>
                   <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">

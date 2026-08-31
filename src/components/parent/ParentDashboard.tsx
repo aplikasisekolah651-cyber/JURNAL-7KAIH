@@ -53,6 +53,7 @@ import { PDFReportGenerator } from '../../lib/pdfGenerator';
 import { audioNotifier } from '../../lib/audioNotifier';
 import { getDateString } from '../../lib/mockData';
 import { HabitId } from '../../types';
+import { UserAvatar } from '../common/UserAvatar';
 
 export const ParentDashboard: React.FC = () => {
   const { currentUser, allUsers } = useAuth();
@@ -254,10 +255,16 @@ export const ParentDashboard: React.FC = () => {
         {/* Quick KPI Bar */}
         {currentStudent && stats && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 mt-4 pt-3.5 border-t border-white/10">
-            <div className="bg-white/5 backdrop-blur-md rounded-lg p-2.5 border border-white/10">
-              <span className="text-[10px] text-slate-300 font-medium">Ananda yang Dipantau</span>
-              <p className="text-xs sm:text-sm font-bold text-white mt-0.5 truncate">{currentStudent.name}</p>
-              <p className="text-[9px] text-rose-200 mt-0.5">{currentStudent.className} • NISN: {currentStudent.nisn}</p>
+            <div className="bg-white/5 backdrop-blur-md rounded-lg p-2.5 border border-white/10 flex items-center gap-2.5">
+              <UserAvatar user={currentStudent} gender={currentStudent.gender} size="sm" className="w-9 h-9 rounded-xl shrink-0" />
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] text-slate-300 font-medium">Ananda yang Dipantau</span>
+                <p className="text-xs sm:text-sm font-bold text-white mt-0.5 truncate">{currentStudent.name}</p>
+                <p className="text-[9px] text-rose-200 mt-0.5 truncate">
+                  {currentStudent.className} • NIS: {currentStudent.nis || currentStudent.nisn || '-'}
+                  {(currentStudent.attendanceNumber || currentStudent.noAbsen) && ` • Absen: ${currentStudent.attendanceNumber || currentStudent.noAbsen}`}
+                </p>
+              </div>
             </div>
 
             <div className="bg-white/5 backdrop-blur-md rounded-lg p-2.5 border border-white/10">
@@ -288,10 +295,10 @@ export const ParentDashboard: React.FC = () => {
       </div>
 
       {/* Main Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 scrollbar-none border-b border-slate-200 dark:border-slate-800 pb-2">
         <button
           onClick={() => setActiveTab('validation')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
             activeTab === 'validation'
               ? 'bg-rose-600 text-white shadow-xs'
               : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50 border border-slate-200 dark:border-slate-700'
@@ -300,7 +307,7 @@ export const ParentDashboard: React.FC = () => {
           <Heart className="w-3.5 h-3.5" />
           <span>Konfirmasi 7 KAIH Harian</span>
           {pendingEntries.length > 0 && (
-            <span className="px-1.5 py-0.2 text-[9px] bg-white text-rose-600 font-black rounded-full">
+            <span className="px-1.5 py-0.5 text-[9px] bg-white text-rose-600 font-black rounded-full">
               {pendingEntries.length}
             </span>
           )}
@@ -308,7 +315,7 @@ export const ParentDashboard: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('progress')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
             activeTab === 'progress'
               ? 'bg-indigo-600 text-white shadow-xs'
               : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50 border border-slate-200 dark:border-slate-700'
@@ -320,14 +327,14 @@ export const ParentDashboard: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('history')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
             activeTab === 'history'
               ? 'bg-emerald-600 text-white shadow-xs'
               : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50 border border-slate-200 dark:border-slate-700'
           }`}
         >
           <Calendar className="w-3.5 h-3.5" />
-          <span>Riwayat Jurnal ({studentEntries.length})</span>
+          <span>Riwayat ({studentEntries.length})</span>
         </button>
       </div>
 

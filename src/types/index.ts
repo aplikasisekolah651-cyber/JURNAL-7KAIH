@@ -8,7 +8,10 @@ export interface User {
   gender?: 'L' | 'P'; // Jenis Kelamin: L = Laki-laki, P = Perempuan
   avatar?: string;
   phone?: string;
-  nisn?: string;
+  nis?: string; // Nomor Induk Siswa (NIS)
+  nisn?: string; // Fallback / legacy alias
+  attendanceNumber?: string; // Nomor Absen Siswa
+  noAbsen?: string; // Alias Nomor Absen
   classId?: string;
   className?: string;
   parentId?: string; // If siswa, links to Orang Tua
@@ -100,7 +103,9 @@ export interface JournalEntry {
   id: string;
   studentId: string;
   studentName: string;
-  studentNisn?: string;
+  studentNis?: string;
+  studentNisn?: string; // Legacy / alias
+  studentAttendanceNo?: string;
   className: string;
   date: string; // YYYY-MM-DD
   createdAt: number;

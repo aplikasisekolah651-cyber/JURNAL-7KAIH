@@ -107,13 +107,15 @@ export class PDFReportGenerator {
 
     doc.setFont('helvetica', 'bold');
     doc.text('Nama Siswa', margin + 4, infoY + 6);
-    doc.text('NISN', margin + 4, infoY + 12);
-    doc.text('Kelas / Satuan', margin + 4, infoY + 18);
+    doc.text('NIS', margin + 4, infoY + 12);
+    doc.text('Kelas / No Absen', margin + 4, infoY + 18);
+
+    const displayAbsen = student.attendanceNumber || student.noAbsen ? `No. ${student.attendanceNumber || student.noAbsen}` : '-';
 
     doc.setFont('helvetica', 'normal');
     doc.text(`: ${student.name}`, margin + 36, infoY + 6);
-    doc.text(`: ${student.nisn || '0089234512'}`, margin + 36, infoY + 12);
-    doc.text(`: ${student.className || '7A'} • ${config.name}`, margin + 36, infoY + 18);
+    doc.text(`: ${student.nis || student.nisn || '-'}`, margin + 36, infoY + 12);
+    doc.text(`: ${student.className || '7A'} / ${displayAbsen}`, margin + 36, infoY + 18);
 
     doc.setFont('helvetica', 'bold');
     doc.text('Bulan Pemantauan', margin + 104, infoY + 6);
@@ -230,7 +232,7 @@ export class PDFReportGenerator {
     doc.setFont('helvetica', 'bold');
     doc.text(student.name, margin + (colW / 2), currentY + 18, { align: 'center' });
     doc.setFont('helvetica', 'normal');
-    doc.text(`NISN. ${student.nisn || '0089234512'}`, margin + (colW / 2), currentY + 22, { align: 'center' });
+    doc.text(`NIS. ${student.nis || student.nisn || '-'}`, margin + (colW / 2), currentY + 22, { align: 'center' });
 
     // Column 2: Orang Tua
     doc.text('Orang Tua / Wali Murid,', margin + colW + (colW / 2), currentY, { align: 'center' });
@@ -246,15 +248,15 @@ export class PDFReportGenerator {
     doc.setFont('helvetica', 'normal');
     doc.text('NIP. 19850314 200801 2 007', margin + 2 * colW + (colW / 2), currentY + 22, { align: 'center' });
 
-    // Bottom Center: Mengetahui Kepala Sekolah
-    currentY += 27;
+    // Bottom Center: Mengetahui Kepala Sekolah (Digeser 2 baris ke bawah agar longgar & rapi)
+    currentY += 35;
     if (currentY + 25 < doc.internal.pageSize.getHeight()) {
       doc.text('Mengetahui,', pageWidth / 2, currentY, { align: 'center' });
-      doc.text(`Kepala ${config.name}`, pageWidth / 2, currentY + 4, { align: 'center' });
+      doc.text(`Kepala ${config.name}`, pageWidth / 2, currentY + 4.5, { align: 'center' });
       doc.setFont('helvetica', 'bold');
-      doc.text(config.principalName, pageWidth / 2, currentY + 18, { align: 'center' });
+      doc.text(config.principalName, pageWidth / 2, currentY + 19, { align: 'center' });
       doc.setFont('helvetica', 'normal');
-      doc.text(`NIP. ${config.principalNip}`, pageWidth / 2, currentY + 22, { align: 'center' });
+      doc.text(`NIP. ${config.principalNip}`, pageWidth / 2, currentY + 23, { align: 'center' });
     }
 
     // Save File
@@ -339,7 +341,8 @@ export class PDFReportGenerator {
     // 4. Students Detail Table
     const tableBody = studentsList.map((item, idx) => [
       (idx + 1).toString(),
-      item.student.nisn || '0089234512',
+      item.student.nis || item.student.nisn || '-',
+      item.student.attendanceNumber || item.student.noAbsen || '-',
       item.student.name,
       `${item.entriesCount} Hari`,
       `${item.score}%`,
@@ -354,7 +357,7 @@ export class PDFReportGenerator {
 
     autoTable(doc, {
       startY: cardY + 19,
-      head: [['No', 'NISN', 'Nama Lengkap Siswa', 'Jurnal', 'Skor Rerata', 'Kategori Keterbiasaan', 'Validasi Ortu', 'Rekomendasi / Catatan Pembinaan']],
+      head: [['No', 'NIS', 'No. Absen', 'Nama Lengkap Siswa', 'Jurnal', 'Skor Rerata', 'Kategori Keterbiasaan', 'Validasi Ortu', 'Rekomendasi / Catatan Pembinaan']],
       body: tableBody,
       theme: 'striped',
       headStyles: {
@@ -369,14 +372,15 @@ export class PDFReportGenerator {
         cellPadding: 2
       },
       columnStyles: {
-        0: { halign: 'center', cellWidth: 10 },
-        1: { halign: 'center', cellWidth: 26 },
-        2: { fontStyle: 'bold', cellWidth: 50 },
-        3: { halign: 'center', cellWidth: 20 },
-        4: { halign: 'center', fontStyle: 'bold', cellWidth: 22 },
-        5: { halign: 'center', fontStyle: 'bold', cellWidth: 38 },
-        6: { halign: 'center', cellWidth: 28 },
-        7: { cellWidth: 75 }
+        0: { halign: 'center', cellWidth: 8 },
+        1: { halign: 'center', cellWidth: 20 },
+        2: { halign: 'center', cellWidth: 16 },
+        3: { fontStyle: 'bold', cellWidth: 46 },
+        4: { halign: 'center', cellWidth: 18 },
+        5: { halign: 'center', fontStyle: 'bold', cellWidth: 20 },
+        6: { halign: 'center', fontStyle: 'bold', cellWidth: 34 },
+        7: { halign: 'center', cellWidth: 24 },
+        8: { cellWidth: 68 }
       }
     });
 

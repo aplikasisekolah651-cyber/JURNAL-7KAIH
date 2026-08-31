@@ -3,7 +3,16 @@ import { User, UserRole } from '../types';
 import { DEMO_USERS } from '../lib/constants';
 import { E2EEService } from '../lib/crypto';
 import { db } from '../lib/firebase';
-import { collection, getDocs, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot, writeBatch } from 'firebase/firestore';
+import { 
+  getUserAvatarUrl, 
+  getRoleDefaultAvatar, 
+  DATA_URI_SISWA_PUTRA, 
+  DATA_URI_SISWA_PUTRI, 
+  DATA_URI_ORANG_TUA, 
+  DATA_URI_WALI_KELAS, 
+  DATA_URI_ADMIN 
+} from '../lib/avatarHelper';
 
 interface AuthContextType {
   currentUser: User;
@@ -17,7 +26,18 @@ interface AuthContextType {
   addUser: (userData: Partial<User>) => Promise<User>;
   updateUser: (userId: string, updates: Partial<User>) => Promise<void>;
   deleteUser: (userId: string) => Promise<void>;
-  importStudentsBulk: (importedList: { name: string; nisn: string; className: string; gender?: 'L' | 'P'; parentName?: string; parentPhone?: string }[]) => Promise<number>;
+  deleteUsersBulk: (userIds: string[]) => Promise<void>;
+  importStudentsBulk: (importedList: { 
+    name: string; 
+    nis?: string; 
+    nisn?: string; 
+    attendanceNumber?: string; 
+    noAbsen?: string; 
+    className: string; 
+    gender?: 'L' | 'P'; 
+    parentName?: string; 
+    parentPhone?: string 
+  }[]) => Promise<number>;
   generateNewCredentials: (userId: string) => Promise<string>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<{ success: boolean; message?: string }>;
 }
@@ -29,7 +49,8 @@ const AUTH_SESSION_KEY = '7kaih_auth_session_v1';
 
 export const normalizeClassName = (cn?: string): string => {
   if (!cn) return '7A';
-  return cn.replace(/^Kelas\s+/i, '').replace(/(\d+)-([A-Za-z])/g, '$1$2').trim() || '7A';
+  const clean = String(cn).trim().replace(/\s+/g, ' ');
+  return clean || '7A';
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -40,7 +61,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const parsed: User[] = JSON.parse(saved);
         return parsed.map(u => ({
           ...u,
-          className: u.className ? normalizeClassName(u.className) : u.className
+          className: u.className ? normalizeClassName(u.className) : u.className,
+          avatar: getUserAvatarUrl(u)
         }));
       } catch (e) {
         console.error('Failed to parse cached users:', e);
@@ -64,11 +86,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return !!sessionUserId;
   });
 
-  // Sync users to localStorage and Firestore if available
+  // Sync users to localStorage whenever allUsers changes
   useEffect(() => {
     localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(allUsers));
-    
-    // Attempt Firestore sync
+  }, [allUsers]);
+
+  // Real-time Firestore sync listener
+  useEffect(() => {
     if (db) {
       try {
         // Listen to Firestore users collection in background
@@ -103,12 +127,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanPwd = password.trim();
 
     if (!cleaned || !cleanPwd) {
-      return { success: false, message: 'Harap isi username/NISN/email dan password.' };
+      return { success: false, message: 'Harap isi username/NIS/email dan password.' };
     }
 
     const found = allUsers.find((u) => {
       const emailMatch = u.email.toLowerCase() === cleaned;
-      const nisnMatch = u.nisn && u.nisn.toLowerCase() === cleaned;
+      const nisMatch = Boolean((u.nis && u.nis.toLowerCase() === cleaned) || (u.nisn && u.nisn.toLowerCase() === cleaned));
       const nameMatch = u.name.toLowerCase() === cleaned;
       const usernameMatch = u.email.toLowerCase().split('@')[0] === cleaned;
       const idMatch = u.id.toLowerCase() === cleaned || u.id.toLowerCase().replace('usr-', '') === cleaned;
@@ -124,7 +148,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cleaned === 'admin@smpn2kasihan.sch.id'
       );
 
-      // Parent aliases derived from student NISN: "ortu.0089234512", "ortu_0089234512", "ortu0089234512"
+      // Parent aliases derived from student NIS: "ortu.8923", "ortu_8923", "ortu8923"
       let isParentAlias = false;
       if (u.role === 'orangtua') {
         const pEmailPrefix = u.email.toLowerCase().split('@')[0];
@@ -132,17 +156,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           isParentAlias = true;
         }
 
-        // Check if cleaned identifier matches child's NISN with ortu prefix or plain child NISN
+        // Check if cleaned identifier matches child's NIS or NISN with ortu prefix or plain child NIS
         if (u.studentIds && u.studentIds.length > 0) {
           const linkedStudents = allUsers.filter(s => u.studentIds?.includes(s.id));
           for (const s of linkedStudents) {
-            if (s.nisn) {
-              const cleanNisn = s.nisn.toLowerCase();
+            const childNis = (s.nis || s.nisn || '').toLowerCase();
+            if (childNis) {
               if (
-                cleaned === `ortu.${cleanNisn}` ||
-                cleaned === `ortu_${cleanNisn}` ||
-                cleaned === `ortu${cleanNisn}` ||
-                cleaned === `ortu.${cleanNisn}@sekolah.id`
+                cleaned === `ortu.${childNis}` ||
+                cleaned === `ortu_${childNis}` ||
+                cleaned === `ortu${childNis}` ||
+                cleaned === `ortu.${childNis}@sekolah.id`
               ) {
                 isParentAlias = true;
                 break;
@@ -153,10 +177,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Student aliases
-      const isStudentAlias = u.role === 'siswa' && (
-        (u.nisn && cleaned === `siswa.${u.nisn.toLowerCase()}`) ||
-        (u.nisn && cleaned === `siswa_${u.nisn.toLowerCase()}`) ||
-        (u.nisn && cleaned === `siswa${u.nisn.toLowerCase()}`)
+      const sNis = (u.nis || u.nisn || '').toLowerCase();
+      const isStudentAlias = u.role === 'siswa' && Boolean(
+        sNis && (
+          cleaned === `siswa.${sNis}` ||
+          cleaned === `siswa_${sNis}` ||
+          cleaned === `siswa${sNis}`
+        )
       );
 
       // Homeroom Teacher / Wali Kelas aliases
@@ -166,13 +193,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         (u.className && cleaned === `wali${u.className.toLowerCase()}`)
       );
 
-      return emailMatch || nisnMatch || nameMatch || usernameMatch || idMatch || phoneMatch || isAdminAlias || isParentAlias || isStudentAlias || isTeacherAlias;
+      return emailMatch || nisMatch || nameMatch || usernameMatch || idMatch || phoneMatch || isAdminAlias || isParentAlias || isStudentAlias || isTeacherAlias;
     });
 
     if (!found) {
       return { 
         success: false, 
-        message: 'Akun dengan username / email / NISN tersebut tidak ditemukan.' 
+        message: 'Akun dengan username / email / NIS tersebut tidak ditemukan.' 
       };
     }
 
@@ -247,12 +274,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const addUser = async (userData: Partial<User>): Promise<User> => {
     const newId = userData.id || `usr-${userData.role || 'siswa'}-${Date.now()}`;
+    const userNis = userData.nis || userData.nisn;
+    const userAbsen = userData.attendanceNumber || userData.noAbsen;
     
-    // Standardized default password logic based on role & NISN
+    // Standardized default password logic based on role & NIS
     let defaultPassword = userData.password;
     if (!defaultPassword) {
-      if (userData.role === 'siswa' && userData.nisn) {
-        defaultPassword = `siswa${userData.nisn}`;
+      if (userData.role === 'siswa' && userNis) {
+        defaultPassword = `siswa${userNis}`;
       } else if (userData.role === 'orangtua') {
         defaultPassword = 'ortu123#Secure';
       } else if (userData.role === 'walikelas') {
@@ -264,26 +293,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
     
-    // Identifier (Username / NISN / Email / Bebas)
+    // Identifier (Username / NIS / Email / Bebas)
     const identifier = userData.email?.trim() || (
-      userData.role === 'siswa' && userData.nisn
-        ? userData.nisn
+      userData.role === 'siswa' && userNis
+        ? userNis
         : `${userData.role || 'user'}_${Date.now()}`
     );
+
+    const computedAvatar = userData.avatar && !userData.avatar.includes('api.dicebear.com') && !userData.avatar.includes('images.unsplash.com')
+      ? userData.avatar
+      : getUserAvatarUrl({ role: userData.role || 'siswa', gender: userData.gender });
 
     const newUser: User = {
       id: newId,
       name: userData.name || 'Pengguna Baru',
       email: identifier,
       role: userData.role || 'siswa',
-      nisn: userData.nisn,
+      gender: userData.gender,
+      nis: userNis,
+      nisn: userNis,
+      attendanceNumber: userAbsen,
+      noAbsen: userAbsen,
       classId: userData.classId || 'class-7a',
       className: userData.className ? normalizeClassName(userData.className) : '7A',
       parentId: userData.parentId,
       studentIds: userData.studentIds,
       assignedClassIds: userData.assignedClassIds,
       phone: userData.phone || '08123456789',
-      avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(userData.name || 'User')}`,
+      avatar: computedAvatar,
       password: defaultPassword,
       schoolName: 'SMP Negeri 2 Kasihan',
       createdAt: new Date().toISOString()
@@ -357,17 +394,74 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(updated));
       return updated;
     });
+
+    if (db) {
+      try {
+        await deleteDoc(doc(db, 'users', userId));
+      } catch (e) {
+        console.warn('Firestore delete user fallback:', e);
+      }
+    }
+  };
+
+  const deleteUsersBulk = async (userIds: string[]): Promise<void> => {
+    if (!userIds || userIds.length === 0) return;
+    const userSet = new Set(userIds);
+    const usersToDelete = allUsers.filter(u => userSet.has(u.id));
+    const studentIdsToDelete = new Set(usersToDelete.filter(u => u.role === 'siswa').map(u => u.id));
+    const parentIdsToDelete = new Set(usersToDelete.filter(u => u.role === 'orangtua').map(u => u.id));
+
+    setAllUsers(prev => {
+      let updated = prev.filter(u => !userSet.has(u.id));
+
+      if (studentIdsToDelete.size > 0) {
+        updated = updated.map(u => {
+          if (u.role === 'orangtua' && u.studentIds) {
+            const newStudentIds = u.studentIds.filter(id => !studentIdsToDelete.has(id));
+            return { ...u, studentIds: newStudentIds };
+          }
+          return u;
+        });
+      }
+
+      if (parentIdsToDelete.size > 0) {
+        updated = updated.map(u => {
+          if (u.role === 'siswa' && u.parentId && parentIdsToDelete.has(u.parentId)) {
+            const { parentId, ...rest } = u;
+            return rest as User;
+          }
+          return u;
+        });
+      }
+
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(updated));
+      return updated;
+    });
+
+    if (db) {
+      try {
+        const batch = writeBatch(db);
+        userIds.forEach(uid => {
+          batch.delete(doc(db, 'users', uid));
+        });
+        await batch.commit();
+      } catch (e) {
+        console.warn('Firestore bulk delete user fallback:', e);
+      }
+    }
   };
 
   const generateNewCredentials = async (userId: string): Promise<string> => {
     const targetUser = allUsers.find(u => u.id === userId);
     let newPassword = E2EEService.generateSecurePassword(10);
-    if (targetUser?.role === 'siswa' && targetUser.nisn) {
-      newPassword = `siswa${targetUser.nisn}`;
+    const targetNis = targetUser?.nis || targetUser?.nisn;
+    if (targetUser?.role === 'siswa' && targetNis) {
+      newPassword = `siswa${targetNis}`;
     } else if (targetUser?.role === 'orangtua') {
       const linked = allUsers.filter(s => targetUser.studentIds?.includes(s.id));
-      if (linked.length > 0 && linked[0].nisn) {
-        newPassword = `ortu${linked[0].nisn}`;
+      const childNis = linked.length > 0 ? (linked[0].nis || linked[0].nisn) : '';
+      if (childNis) {
+        newPassword = `ortu${childNis}`;
       } else {
         newPassword = 'ortu123#Secure';
       }
@@ -397,19 +491,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const importStudentsBulk = async (
-    importedList: { name: string; nisn: string; className: string; gender?: 'L' | 'P'; parentName?: string; parentPhone?: string }[]
+    importedList: { 
+      name: string; 
+      nis?: string; 
+      nisn?: string; 
+      attendanceNumber?: string; 
+      noAbsen?: string; 
+      className: string; 
+      gender?: 'L' | 'P'; 
+      parentName?: string; 
+      parentPhone?: string 
+    }[]
   ): Promise<number> => {
     let count = 0;
     const newStudents: User[] = [];
     const newParents: User[] = [];
 
     for (const item of importedList) {
-      const cleanNisn = item.nisn.trim();
+      const cleanNis = (item.nis || item.nisn || '').trim();
+      const cleanAbsen = (item.attendanceNumber || item.noAbsen || '').trim();
       const cleanName = item.name.trim();
-      if (!cleanName || !cleanNisn) continue;
+      if (!cleanName || !cleanNis) continue;
       
-      const studentId = `usr-siswa-${cleanNisn}`;
-      const parentId = `usr-ortu-${cleanNisn}`;
+      const studentId = `usr-siswa-${cleanNis}`;
+      const parentId = `usr-ortu-${cleanNis}`;
 
       // Normalize gender (L = Laki-laki, P = Perempuan)
       let cleanGender: 'L' | 'P' = 'L';
@@ -427,33 +532,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const parentUser: User = {
         id: parentId,
         name: pName.includes('(Ortu') ? pName : `${pName} (Ortu ${cleanName})`,
-        email: `ortu.${cleanNisn}@sekolah.id`,
+        email: `ortu.${cleanNis}@sekolah.id`,
         role: 'orangtua',
         studentIds: [studentId],
         phone: item.parentPhone?.trim() || '08123456789',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(pName)}`,
-        password: `ortu${cleanNisn}`, // Digenerate otomatis dari NISN anak
+        avatar: DATA_URI_ORANG_TUA,
+        password: `ortu${cleanNis}`, // Digenerate otomatis dari NIS anak
         schoolName: 'SMP Negeri 2 Kasihan',
         createdAt: new Date().toISOString()
       };
       newParents.push(parentUser);
 
-      // 2. Siswa: Kredensial terstandarisasi berbasis NISN
+      const normalizedClass = item.className ? normalizeClassName(item.className) : '7A';
+      const cleanClassId = `class-${normalizedClass.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+
+      // 2. Siswa: Kredensial terstandarisasi berbasis NIS
       const studentUser: User = {
         id: studentId,
         name: cleanName,
-        email: `${cleanNisn}@sekolah.id`,
+        email: `${cleanNis}@sekolah.id`,
         role: 'siswa',
         gender: cleanGender,
-        nisn: cleanNisn,
-        classId: item.className?.toLowerCase().replace(/\s+/g, '-').replace('kelas-', 'class-') || 'class-7a',
-        className: item.className ? normalizeClassName(item.className) : '7A',
+        nis: cleanNis,
+        nisn: cleanNis,
+        attendanceNumber: cleanAbsen,
+        noAbsen: cleanAbsen,
+        classId: cleanClassId,
+        className: normalizedClass,
         parentId: parentId,
         phone: '08123456789',
-        avatar: cleanGender === 'P'
-          ? `https://api.dicebear.com/7.x/avataaars/svg?seed=female-${encodeURIComponent(cleanName)}`
-          : `https://api.dicebear.com/7.x/avataaars/svg?seed=male-${encodeURIComponent(cleanName)}`,
-        password: `siswa${cleanNisn}`, // Digenerate otomatis dari NISN
+        avatar: cleanGender === 'P' ? DATA_URI_SISWA_PUTRI : DATA_URI_SISWA_PUTRA,
+        password: `siswa${cleanNis}`, // Digenerate otomatis dari NIS
         schoolName: 'SMP Negeri 2 Kasihan',
         createdAt: new Date().toISOString()
       };
@@ -469,6 +578,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(updated));
       return updated;
     });
+
+    // Realtime persistence to Firestore
+    if (db) {
+      try {
+        const batch = writeBatch(db);
+        [...newStudents, ...newParents].forEach(u => {
+          batch.set(doc(db, 'users', u.id), u);
+        });
+        await batch.commit();
+      } catch (e) {
+        console.warn('Firestore write batch fallback:', e);
+      }
+    }
 
     return count;
   };
@@ -487,6 +609,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addUser,
         updateUser,
         deleteUser,
+        deleteUsersBulk,
         importStudentsBulk,
         generateNewCredentials,
         changePassword

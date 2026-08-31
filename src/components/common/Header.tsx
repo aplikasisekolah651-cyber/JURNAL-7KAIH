@@ -23,6 +23,7 @@ import { useJournal } from '../../context/JournalContext';
 import { useSchoolSettings } from '../../context/SchoolContext';
 import { UserRole } from '../../types';
 import { SchoolLogo } from './SchoolLogo';
+import { UserAvatar } from './UserAvatar';
 import { NotificationDropdown } from './NotificationDropdown';
 import { ReminderModal } from './ReminderModal';
 import { E2EEBadge } from './E2EEBadge';
@@ -125,7 +126,7 @@ export const Header: React.FC<HeaderProps> = ({ onSelectDate }) => {
             <button
               id="header-reminder-btn"
               onClick={() => setShowReminderModal(true)}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
+              className="p-2 sm:p-1.5 min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
               title="Pengingat Otomatis 7 KAIH"
             >
               <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -136,12 +137,12 @@ export const Header: React.FC<HeaderProps> = ({ onSelectDate }) => {
               <button
                 id="header-notif-btn"
                 onClick={() => setShowNotificationDropdown(!showNotificationDropdown)}
-                className="relative p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
+                className="relative p-2 sm:p-1.5 min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
                 title="Notifikasi"
               >
                 <Bell className="w-4 h-4" />
                 {unreadNotificationCount > 0 && (
-                  <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full ring-2 ring-white dark:ring-[#0F172A] animate-pulse" />
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full ring-2 ring-white dark:ring-[#0F172A] animate-pulse" />
                 )}
               </button>
 
@@ -156,7 +157,7 @@ export const Header: React.FC<HeaderProps> = ({ onSelectDate }) => {
             <button
               id="header-theme-toggle-btn"
               onClick={toggleTheme}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
+              className="p-2 sm:p-1.5 min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-colors"
               title={theme === 'dark' ? 'Ganti ke Mode Terang' : 'Ganti ke Mode Gelap'}
             >
               {theme === 'dark' ? (
@@ -171,13 +172,13 @@ export const Header: React.FC<HeaderProps> = ({ onSelectDate }) => {
               <button
                 id="header-user-menu-btn"
                 onClick={() => setShowUserMenu(!showUserMenu)}
-                className="flex items-center gap-1.5 p-1 pl-1.5 pr-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200/70 dark:hover:bg-slate-700 border border-slate-200/70 dark:border-slate-700/60 transition-colors text-left"
+                className="flex items-center gap-1.5 p-1.5 pl-2 pr-2.5 min-h-[38px] rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200/70 dark:hover:bg-slate-700 border border-slate-200/70 dark:border-slate-700/60 transition-colors text-left"
               >
-                <img
-                  src={currentUser.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=Demo'}
-                  alt={currentUser.name}
-                  referrerPolicy="no-referrer"
-                  className="w-6 h-6 rounded-lg object-cover ring-1 ring-white dark:ring-slate-700 shrink-0"
+                <UserAvatar
+                  user={currentUser}
+                  gender={currentUser.gender}
+                  size="sm"
+                  className="w-6 h-6 rounded-lg ring-1 ring-white dark:ring-slate-700 shrink-0"
                 />
                 <div className="hidden sm:block max-w-[120px]">
                   <p className="text-xs font-semibold text-slate-900 dark:text-white truncate leading-tight">
@@ -196,11 +197,11 @@ export const Header: React.FC<HeaderProps> = ({ onSelectDate }) => {
                   {/* Account Info Box */}
                   <div className="p-3 bg-slate-50/80 dark:bg-slate-900/80 border border-slate-100 dark:border-slate-800 rounded-xl mb-2">
                     <div className="flex items-center gap-2.5">
-                      <img
-                        src={currentUser.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=Demo'}
-                        alt={currentUser.name}
-                        referrerPolicy="no-referrer"
-                        className="w-10 h-10 rounded-xl object-cover ring-1 ring-indigo-500/20 shrink-0"
+                      <UserAvatar
+                        user={currentUser}
+                        gender={currentUser.gender}
+                        size="md"
+                        className="w-10 h-10 rounded-xl ring-1 ring-indigo-500/20 shrink-0"
                       />
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-extrabold text-slate-900 dark:text-white truncate leading-tight">

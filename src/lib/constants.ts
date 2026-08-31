@@ -1,4 +1,11 @@
 import { HabitDefinition, HabitId, User, SchoolClass, ReminderSetting, SchoolSettings } from '../types';
+import { 
+  DATA_URI_SISWA_PUTRA, 
+  DATA_URI_SISWA_PUTRI, 
+  DATA_URI_ORANG_TUA, 
+  DATA_URI_WALI_KELAS, 
+  DATA_URI_ADMIN 
+} from './avatarHelper';
 
 export const HABIT_DEFINITIONS: Record<HabitId, HabitDefinition> = {
   bangun_pagi: {
@@ -226,12 +233,15 @@ export const DEMO_USERS: User[] = [
     email: '0089234512@sekolah.id',
     role: 'siswa',
     gender: 'L',
-    nisn: '0089234512',
+    nis: '8923',
+    nisn: '8923',
+    attendanceNumber: '01',
+    noAbsen: '01',
     classId: 'class-7a',
     className: '7A',
     parentId: 'usr-ortu-1',
     phone: '081234567890',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_SISWA_PUTRA,
     password: 'siswa0089234512',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -242,12 +252,15 @@ export const DEMO_USERS: User[] = [
     email: '0089234513@sekolah.id',
     role: 'siswa',
     gender: 'P',
-    nisn: '0089234513',
+    nis: '8924',
+    nisn: '8924',
+    attendanceNumber: '02',
+    noAbsen: '02',
     classId: 'class-7a',
     className: '7A',
     parentId: 'usr-ortu-2',
     phone: '081234567891',
-    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_SISWA_PUTRI,
     password: 'siswa0089234513',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -258,12 +271,15 @@ export const DEMO_USERS: User[] = [
     email: '0089234514@sekolah.id',
     role: 'siswa',
     gender: 'L',
-    nisn: '0089234514',
+    nis: '8925',
+    nisn: '8925',
+    attendanceNumber: '03',
+    noAbsen: '03',
     classId: 'class-7a',
     className: '7A',
     parentId: 'usr-ortu-3',
     phone: '081234567892',
-    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_SISWA_PUTRA,
     password: 'siswa0089234514',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -274,12 +290,15 @@ export const DEMO_USERS: User[] = [
     email: '0089234515@sekolah.id',
     role: 'siswa',
     gender: 'P',
-    nisn: '0089234515',
+    nis: '8926',
+    nisn: '8926',
+    attendanceNumber: '04',
+    noAbsen: '04',
     classId: 'class-7a',
     className: '7A',
     parentId: 'usr-ortu-4',
     phone: '081234567893',
-    avatar: 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_SISWA_PUTRI,
     password: 'siswa0089234515',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -291,7 +310,7 @@ export const DEMO_USERS: User[] = [
     role: 'orangtua',
     studentIds: ['usr-siswa-1'],
     phone: '081398765432',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_ORANG_TUA,
     password: 'ortu0089234512',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -303,7 +322,7 @@ export const DEMO_USERS: User[] = [
     role: 'orangtua',
     studentIds: ['usr-siswa-2'],
     phone: '081398765433',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_ORANG_TUA,
     password: 'ortu0089234513',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -315,7 +334,7 @@ export const DEMO_USERS: User[] = [
     role: 'orangtua',
     studentIds: ['usr-siswa-3'],
     phone: '081398765434',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_ORANG_TUA,
     password: 'ortu0089234514',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -327,7 +346,7 @@ export const DEMO_USERS: User[] = [
     role: 'orangtua',
     studentIds: ['usr-siswa-4'],
     phone: '081398765435',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_ORANG_TUA,
     password: 'ortu0089234515',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -340,7 +359,7 @@ export const DEMO_USERS: User[] = [
     assignedClassIds: ['class-7a', 'class-8a'],
     className: '7A (Wali Kelas)',
     phone: '081122334455',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_WALI_KELAS,
     password: 'wali123#Secure',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
@@ -351,7 +370,7 @@ export const DEMO_USERS: User[] = [
     email: 'aplikasisekolah651@gmail.com',
     role: 'admin',
     phone: '081299887766',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80',
+    avatar: DATA_URI_ADMIN,
     password: 'admin123#Master',
     schoolName: 'SMP Negeri 2 Kasihan',
     createdAt: '2025-07-15T08:00:00.000Z'
