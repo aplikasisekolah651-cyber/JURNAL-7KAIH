@@ -1,0 +1,6 @@
+{
+  "name": "Jurnal 7 KAIH - SMP Negeri 2 Kasihan",
+  "description": "Aplikasi pencatatan jurnal harian 7 Kebiasaan Anak Indonesia Hebat SMP Negeri 2 Kasihan Bantul dengan validasi orang tua, panel wali kelas, analisis keterbiasaan, dan cetak laporan kop resmi.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
