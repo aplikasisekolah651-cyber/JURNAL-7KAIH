@@ -20,7 +20,9 @@ import {
   Star, 
   Image as ImageIcon,
   Check,
-  RotateCcw
+  RotateCcw,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { useJournal } from '../../context/JournalContext';
 import { useAuth } from '../../context/AuthContext';
@@ -42,7 +44,7 @@ const HABIT_KEYS: HabitId[] = [
 ];
 
 export const AdminJournalMonitoring: React.FC = () => {
-  const { journals } = useJournal();
+  const { journals, deleteJournal, deleteJournalsBulk, clearAllJournals } = useJournal();
   const { allUsers } = useAuth();
   const { schoolSettings } = useSchoolSettings();
 
@@ -101,6 +103,17 @@ export const AdminJournalMonitoring: React.FC = () => {
 
   // Detail Modal State
   const [activeJournalDetail, setActiveJournalDetail] = useState<JournalEntry | null>(null);
+
+  // Delete Modals
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
+  const [deleteSingleModal, setDeleteSingleModal] = useState<{ open: boolean; journal: JournalEntry | null }>({
+    open: false,
+    journal: null
+  });
+  const [isDeletingSingle, setIsDeletingSingle] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isDeletingBulk, setIsDeletingBulk] = useState(false);
 
   // Today Date string
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -317,6 +330,15 @@ export const AdminJournalMonitoring: React.FC = () => {
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Ekspor Excel ({selectedJournalIds.length > 0 ? selectedJournalIds.length : filteredJournals.length})</span>
             </button>
+            <button
+              onClick={() => setShowClearAllModal(true)}
+              disabled={journals.length === 0}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-all active:scale-95 cursor-pointer"
+              title="Kosongkan Seluruh Data Monitoring Jurnal"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Kosongkan Monitoring ({journals.length})</span>
+            </button>
           </div>
         </div>
       </div>
@@ -474,21 +496,28 @@ export const AdminJournalMonitoring: React.FC = () => {
 
         {/* Active Selection Banner */}
         {selectedJournalIds.length > 0 && (
-          <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800 flex items-center justify-between text-xs">
+          <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-bold text-purple-700 dark:text-purple-300">
               Terpilih: {selectedJournalIds.length} Jurnal Siswa
             </span>
             <div className="flex items-center gap-2">
               <button
                 onClick={handleExportToExcel}
-                className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-500 transition-all flex items-center gap-1"
+                className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-500 transition-all flex items-center gap-1 cursor-pointer"
               >
                 <Download className="w-3 h-3" />
                 <span>Unduh Terpilih ({selectedJournalIds.length})</span>
               </button>
               <button
+                onClick={() => setShowBulkDeleteModal(true)}
+                className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold text-[11px] hover:bg-rose-500 transition-all flex items-center gap-1 cursor-pointer"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>Hapus Terpilih ({selectedJournalIds.length})</span>
+              </button>
+              <button
                 onClick={() => setSelectedJournalIds([])}
-                className="px-2 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-semibold text-[11px]"
+                className="px-2 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-semibold text-[11px] cursor-pointer"
               >
                 Batal Pilih
               </button>
@@ -523,10 +552,21 @@ export const AdminJournalMonitoring: React.FC = () => {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {paginatedJournals.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-slate-400">
-                    <BookOpen className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                    <p className="font-semibold text-xs text-slate-600 dark:text-slate-300">Tidak ada data jurnal yang sesuai dengan filter.</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Coba ubah kriteria tanggal, kelas, atau kata kunci pencarian.</p>
+                  <td colSpan={8} className="p-10 text-center text-slate-400">
+                    <BookOpen className="w-10 h-10 mx-auto mb-2.5 opacity-30 text-purple-600 dark:text-purple-400" />
+                    {journals.length === 0 ? (
+                      <>
+                        <p className="font-bold text-sm text-slate-700 dark:text-slate-200">Data Monitoring Masih Kosong</p>
+                        <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                          Belum ada catatan jurnal kebiasaan siswa. Data monitoring akan terisi secara otomatis dan real-time saat siswa mulai mengisi jurnal 7 KAIH harian.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-semibold text-xs text-slate-600 dark:text-slate-300">Tidak ada data jurnal yang sesuai dengan filter</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">Coba ubah kriteria tanggal, kelas, atau kata kunci pencarian.</p>
+                      </>
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -679,16 +719,23 @@ export const AdminJournalMonitoring: React.FC = () => {
                           <button
                             onClick={() => setActiveJournalDetail(journal)}
                             title="Lihat Detail Lengkap Jurnal"
-                            className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/80 rounded-lg transition-colors"
+                            className="p-1 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/80 rounded-lg transition-colors cursor-pointer"
                           >
                             <Eye className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handlePrintStudentPDF(journal)}
                             title="Cetak Laporan PDF Siswa"
-                            className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                            className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                           >
                             <Printer className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteSingleModal({ open: true, journal })}
+                            title="Hapus Data Jurnal Ini"
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </td>
@@ -936,16 +983,211 @@ export const AdminJournalMonitoring: React.FC = () => {
             <div className="p-3 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
               <button
                 onClick={() => handlePrintStudentPDF(activeJournalDetail)}
-                className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs"
+                className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
               >
                 <Printer className="w-3.5 h-3.5" />
                 <span>Cetak Laporan PDF</span>
               </button>
               <button
                 onClick={() => setActiveJournalDetail(null)}
-                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Kosongkan Seluruh Data Monitoring */}
+      {showClearAllModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-[#1E293B] w-full max-w-md rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+            <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/80 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Kosongkan Data Monitoring?
+                </h3>
+                <p className="text-xs text-slate-500">Tindakan ini tidak dapat dibatalkan</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Seluruh data jurnal siswa ({journals.length} entri jurnal) pada tabel pemantauan akan dihapus dan dikosongkan. Sistem akan kembali dalam kondisi bersih siap menerima data baru dari siswa.
+            </p>
+
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-[11px] text-rose-700 dark:text-rose-300">
+              <p className="font-bold">⚠️ Perhatian:</p>
+              <p>Data akun siswa, orang tua, dan wali kelas tetap aman dan tidak akan terhapus.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearAllModal(false)}
+                disabled={isClearingAll}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isClearingAll}
+                onClick={async () => {
+                  setIsClearingAll(true);
+                  try {
+                    await clearAllJournals();
+                    setSelectedJournalIds([]);
+                    setShowClearAllModal(false);
+                  } catch (e) {
+                    console.error('Failed to clear journals:', e);
+                  } finally {
+                    setIsClearingAll(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isClearingAll ? (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Mengosongkan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Kosongkan Data</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Terpilih */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-[#1E293B] w-full max-w-md rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+            <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/80 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Hapus {selectedJournalIds.length} Jurnal Terpilih?
+                </h3>
+                <p className="text-xs text-slate-500">Konfirmasi penghapusan data massal</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Apakah Anda yakin ingin menghapus <strong>{selectedJournalIds.length}</strong> data jurnal yang telah dipilih? Data yang dihapus tidak dapat dipulihkan.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteModal(false)}
+                disabled={isDeletingBulk}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingBulk}
+                onClick={async () => {
+                  setIsDeletingBulk(true);
+                  try {
+                    await deleteJournalsBulk(selectedJournalIds);
+                    setSelectedJournalIds([]);
+                    setShowBulkDeleteModal(false);
+                  } catch (e) {
+                    console.error('Failed to bulk delete journals:', e);
+                  } finally {
+                    setIsDeletingBulk(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingBulk ? (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Hapus {selectedJournalIds.length} Jurnal</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Single Jurnal */}
+      {deleteSingleModal.open && deleteSingleModal.journal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-[#1E293B] w-full max-w-md rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+            <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/80 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Hapus Data Jurnal?
+                </h3>
+                <p className="text-xs text-slate-500">Konfirmasi penghapusan</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Hapus jurnal milik siswa <strong>{deleteSingleModal.journal.studentName}</strong> (Kelas {deleteSingleModal.journal.className}) untuk tanggal <strong>{deleteSingleModal.journal.date}</strong>?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteSingleModal({ open: false, journal: null })}
+                disabled={isDeletingSingle}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingSingle}
+                onClick={async () => {
+                  if (!deleteSingleModal.journal) return;
+                  setIsDeletingSingle(true);
+                  try {
+                    await deleteJournal(deleteSingleModal.journal.id);
+                    setSelectedJournalIds(prev => prev.filter(id => id !== deleteSingleModal.journal?.id));
+                    setDeleteSingleModal({ open: false, journal: null });
+                  } catch (e) {
+                    console.error('Failed to delete journal:', e);
+                  } finally {
+                    setIsDeletingSingle(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingSingle ? (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

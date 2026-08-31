@@ -9,11 +9,11 @@ import {
   User
 } from '../types';
 import { DEFAULT_REMINDERS, HABIT_LIST } from '../lib/constants';
-import { generateSeedJournals, getDateString } from '../lib/mockData';
+import { getDateString } from '../lib/mockData';
 import { audioNotifier } from '../lib/audioNotifier';
 import { E2EEService } from '../lib/crypto';
 import { db } from '../lib/firebase';
-import { collection, setDoc, doc, onSnapshot } from 'firebase/firestore';
+import { collection, setDoc, doc, onSnapshot, deleteDoc, getDocs } from 'firebase/firestore';
 
 interface JournalContextType {
   journals: JournalEntry[];
@@ -35,6 +35,9 @@ interface JournalContextType {
   giveTeacherFeedback: (journalId: string, teacherUser: User, notes: string, recommendation?: string, badge?: string) => Promise<void>;
   getStudentJournalByDate: (studentId: string, date: string) => JournalEntry | undefined;
   getStudentJournals: (studentId: string) => JournalEntry[];
+  deleteJournal: (journalId: string) => Promise<void>;
+  deleteJournalsBulk: (journalIds: string[]) => Promise<void>;
+  clearAllJournals: () => Promise<void>;
   
   // Stats & Analytics
   getClassAnalysis: (classId: string, studentIds: string[]) => ClassAnalysisSummary;
@@ -58,21 +61,32 @@ interface JournalContextType {
 
 const JournalContext = createContext<JournalContextType | undefined>(undefined);
 
-const JOURNALS_STORAGE_KEY = '7kaih_journals_v1';
+const JOURNALS_STORAGE_KEY = '7kaih_journals_v2';
 const REMINDERS_STORAGE_KEY = '7kaih_reminders_v1';
 const NOTIFICATIONS_STORAGE_KEY = '7kaih_notifications_v1';
 
 export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Clear any legacy seed data from v1
+  useEffect(() => {
+    try {
+      localStorage.removeItem('7kaih_journals_v1');
+    } catch (e) {
+      console.warn('Storage cleanup:', e);
+    }
+  }, []);
+
   const [journals, setJournals] = useState<JournalEntry[]>(() => {
     const saved = localStorage.getItem(JOURNALS_STORAGE_KEY);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {
         console.error('Failed to parse cached journals:', e);
       }
     }
-    return generateSeedJournals();
+    // Default to empty array - all monitoring data starts empty until filled
+    return [];
   });
 
   const [reminders, setReminders] = useState<ReminderSetting[]>(() => {
@@ -384,6 +398,52 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const deleteJournal = async (journalId: string): Promise<void> => {
+    setJournals(prev => prev.filter(j => j.id !== journalId));
+    if (db) {
+      try {
+        await deleteDoc(doc(db, 'journals', journalId));
+      } catch (e) {
+        console.warn('Firestore delete journal sync:', e);
+      }
+    }
+  };
+
+  const deleteJournalsBulk = async (journalIds: string[]): Promise<void> => {
+    const idSet = new Set(journalIds);
+    setJournals(prev => prev.filter(j => !idSet.has(j.id)));
+    if (db) {
+      try {
+        await Promise.all(journalIds.map(id => deleteDoc(doc(db, 'journals', id))));
+      } catch (e) {
+        console.warn('Firestore bulk delete journal sync:', e);
+      }
+    }
+  };
+
+  const clearAllJournals = async (): Promise<void> => {
+    const currentJournals = [...journals];
+    setJournals([]);
+    try {
+      localStorage.removeItem(JOURNALS_STORAGE_KEY);
+      localStorage.removeItem('7kaih_journals_v1');
+    } catch (e) {
+      console.warn('Local storage clear error:', e);
+    }
+    if (db) {
+      try {
+        const querySnapshot = await getDocs(collection(db, 'journals'));
+        const deletePromises: Promise<void>[] = [];
+        querySnapshot.forEach((docSnap) => {
+          deletePromises.push(deleteDoc(doc(db, 'journals', docSnap.id)));
+        });
+        await Promise.all(deletePromises);
+      } catch (e) {
+        console.warn('Firestore clear all journals sync:', e);
+      }
+    }
+  };
+
   const getStudentJournalByDate = (studentId: string, date: string): JournalEntry | undefined => {
     return journals.find(j => j.studentId === studentId && j.date === date);
   };
@@ -598,6 +658,9 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
         giveTeacherFeedback,
         getStudentJournalByDate,
         getStudentJournals,
+        deleteJournal,
+        deleteJournalsBulk,
+        clearAllJournals,
         getClassAnalysis,
         getStudentStats,
         updateReminder,
